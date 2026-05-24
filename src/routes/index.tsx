@@ -14,7 +14,7 @@ export const Route = createFileRoute("/")({
   }),
 });
 
-const N8N_WEBHOOK_URL = "https://bhavanisankar.app.n8n.cloud/webhook/upload-resume";
+const N8N_WEBHOOK_URL = "https://poojitharamya7125.app.n8n.cloud/webhook-test/upload-resume";
 
 type Job = {
   title: string;
