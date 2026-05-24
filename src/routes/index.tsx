@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Upload, FileText, X, Sparkles, Loader2, ExternalLink, RotateCcw, Briefcase, CheckCircle2 } from "lucide-react";
+import { Upload, FileText, X, Sparkles, Loader2, ExternalLink, RotateCcw, Briefcase, CheckCircle2, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/")({
@@ -14,15 +14,15 @@ export const Route = createFileRoute("/")({
   }),
 });
 
-// Swap this with your production n8n webhook URL.
-const N8N_WEBHOOK_URL = "YOUR_N8N_PRODUCTION_WEBHOOK_URL_HERE";
+const N8N_WEBHOOK_URL = "https://bhavanisankar.app.n8n.cloud/webhook/upload-resume";
 
 type Job = {
   title: string;
   company: string;
+  location: string;
+  skills: string;
   url: string;
-  match_score: string;
-  reason: string;
+  score: string;
 };
 
 type Phase = "upload" | "loading" | "results";
@@ -101,9 +101,11 @@ function Index() {
       const res = await fetch(N8N_WEBHOOK_URL, { method: "POST", body: fd });
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const data = await res.json();
-      const jobs: Job[] = Array.isArray(data) ? data : data.jobs ?? [];
+      const raw: Job[] = Array.isArray(data)
+        ? data
+        : data.topJobs ?? data.jobs ?? [];
       clearTimers();
-      setResults(jobs);
+      setResults(raw.slice(0, 5));
       setPhase("results");
     } catch (err) {
       console.error(err);
