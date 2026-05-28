@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { User, Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
@@ -40,6 +40,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isMockMode, setIsMockMode] = useState(false);
+
+  const sessionRef = useRef<Session | null>(null);
+  const userRef = useRef<User | null>(null);
 
   const checkConfig = isSupabaseConfigured();
 
@@ -89,6 +92,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const parsed = JSON.parse(savedMockSession);
           setUser(parsed.user);
           setProfile(parsed.profile);
+          userRef.current = parsed.user;
+          sessionRef.current = null;
         } catch {
           // ignore
         }
@@ -99,6 +104,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // 1. Get initial session
     supabase.auth.getSession().then(async ({ data: { session: initialSession } }) => {
+      sessionRef.current = initialSession;
+      userRef.current = initialSession?.user ?? null;
+
       setSession(initialSession);
       setUser(initialSession?.user ?? null);
 
@@ -113,6 +121,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+      const prevSession = sessionRef.current;
+      const prevUser = userRef.current;
+
+      // Prevent infinite loop if session state has not changed
+      if (
+        currentSession?.access_token === prevSession?.access_token &&
+        currentSession?.user?.id === prevUser?.id
+      ) {
+        setIsLoading(false);
+        return;
+      }
+
+      sessionRef.current = currentSession;
+      userRef.current = currentSession?.user ?? null;
+
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
 

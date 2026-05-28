@@ -397,7 +397,7 @@ function Dashboard() {
     [user, searchHistory, isMockMode],
   );
 
-  const handleFile = (f: File | null) => {
+  const handleFile = (f: File | null | undefined) => {
     if (!f) return;
     const name = f.name.toLowerCase();
     const isValid = ACCEPTED_EXTS.some((ext) => name.endsWith(ext));
@@ -433,25 +433,85 @@ function Dashboard() {
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const data = await res.json();
 
-      const rawJobs: Job[] = Array.isArray(data) ? data : (data.topJobs ?? data.jobs ?? []);
+      let parsedData = data;
 
-      // Parse skills & ATS score from response dynamically
-      // Aggregating mock details if backend only returns basic job items
-      const derivedSkills =
-        data.extractedSkills ??
-        data.skills ??
-        Array.from(
+      // 1. Unpack n8n wrapper if wrapped in an array of execution items [ { json: ... } ]
+      if (Array.isArray(data) && data.length > 0) {
+        const firstItem = data[0];
+        if (firstItem && typeof firstItem === "object") {
+          if ("json" in firstItem) {
+            parsedData = firstItem.json;
+          } else if ("body" in firstItem) {
+            parsedData = firstItem.body;
+          } else if (!("title" in firstItem) && !("company" in firstItem)) {
+            // It's a wrapped object but not a direct job object
+            parsedData = firstItem;
+          }
+        }
+      } else if (data && typeof data === "object" && "json" in data) {
+        parsedData = data.json;
+      }
+
+      // 2. Extract job list
+      let rawJobs: Job[] = [];
+      if (Array.isArray(parsedData)) {
+        rawJobs = parsedData;
+      } else if (parsedData && typeof parsedData === "object") {
+        rawJobs = parsedData.topJobs ?? parsedData.jobs ?? parsedData.data ?? [];
+      }
+
+      // 3. Normalize job items in case they are wrapped individually e.g. [ { json: { title: "..." } } ]
+      if (Array.isArray(rawJobs)) {
+        rawJobs = rawJobs.map((item: any) => {
+          if (item && typeof item === "object") {
+            if ("json" in item) return item.json;
+            if ("body" in item) return item.body;
+          }
+          return item;
+        });
+      } else {
+        rawJobs = [];
+      }
+
+      // 4. Extract skills
+      let derivedSkills: string[] = [];
+      if (parsedData && typeof parsedData === "object") {
+        const skillsVal = parsedData.extractedSkills ?? parsedData.skills;
+        if (Array.isArray(skillsVal)) {
+          derivedSkills = skillsVal.map(String);
+        } else if (typeof skillsVal === "string") {
+          derivedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
+        }
+      }
+      if (derivedSkills.length === 0) {
+        // Fallback to extracting from jobs
+        derivedSkills = Array.from(
           new Set(
             rawJobs.flatMap((j) => (j.skills ? j.skills.split(",").map((s) => s.trim()) : [])),
           ),
         ).slice(0, 10);
-      const derivedScore =
-        data.atsScore ??
-        (rawJobs.length > 0
-          ? Math.round(
-              rawJobs.reduce((acc, j) => acc + parseFloat(j.score || "0"), 0) / rawJobs.length,
-            )
-          : 75);
+      }
+
+      // 5. Extract ATS Score
+      let derivedScore = 75;
+      if (parsedData && typeof parsedData === "object") {
+        const scoreVal = parsedData.atsScore ?? parsedData.score ?? parsedData.ats_score;
+        if (scoreVal !== undefined && scoreVal !== null) {
+          const num = parseFloat(String(scoreVal).replace(/%/g, ""));
+          if (!isNaN(num)) {
+            derivedScore = Math.round(num);
+          }
+        }
+      }
+      if (derivedScore === 75 && rawJobs.length > 0) {
+        const avg = rawJobs.reduce((acc, j) => {
+          const s = parseFloat(String(j.score).replace(/%/g, "") || "0");
+          return acc + (isNaN(s) ? 0 : s);
+        }, 0) / rawJobs.length;
+        if (avg > 0) {
+          derivedScore = Math.round(avg);
+        }
+      }
 
       clearTimers();
       setJobs(rawJobs.slice(0, 8)); // Top 8 matches

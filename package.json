@@ -1,17 +1,12 @@
-
 {
   "name": "tanstack_start_ts",
   "private": true,
   "sideEffects": false,
   "type": "module",
   "scripts": {
-  "dev": "vite dev",
-  "build": "vite build --ssrManifest false",
-  "build:dev": "vite build --mode development",
-  "preview": "vite preview",
-  "start": "node dist/server/server.js",
-  "lint": "eslint .",
-  "format": "prettier --write ."
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",
@@ -75,7 +70,7 @@
     "@types/node": "^22.16.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^5.0.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9.32.0",
     "eslint-config-prettier": "^10.1.1",
     "eslint-plugin-prettier": "^5.2.6",
