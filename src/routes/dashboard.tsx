@@ -34,6 +34,8 @@ import {
   Zap,
   BarChart2,
   Clock,
+  Search,
+  Award,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -864,10 +866,10 @@ function Dashboard() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen overflow-hidden bg-[#f8fafc] dark:bg-slate-950 text-foreground transition-colors duration-300">
       {/* SIDEBAR FOR DESKTOP */}
-      <aside className="hidden md:flex md:w-64 md:flex-col border-r border-border bg-card/60 backdrop-blur-md">
-        <div className="flex h-16 items-center justify-between border-b border-border px-6">
+      <aside className="hidden md:flex md:w-64 md:flex-col border-r border-slate-200/50 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 backdrop-blur-md">
+        <div className="flex h-16 items-center justify-between border-b border-slate-200/50 dark:border-slate-800/80 px-6">
           <div
             className="flex items-center gap-2 group cursor-pointer"
             onClick={() => navigate({ to: "/" })}
@@ -891,7 +893,7 @@ function Dashboard() {
         </nav>
 
         {/* User Card */}
-        <div className="border-t border-border p-4 space-y-3">
+        <div className="border-t border-slate-200/50 dark:border-slate-800/80 p-4 space-y-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-primary/15 flex items-center justify-center text-primary font-bold">
               {profile?.full_name?.charAt(0).toUpperCase() ||
@@ -906,20 +908,33 @@ function Dashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
+          <div className="space-y-2">
+            <button
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="rounded-lg h-9 w-9"
+              className="w-full flex items-center justify-between rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/50 dark:bg-slate-950/20 px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-350 transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-900 active:scale-95 cursor-pointer shadow-inner"
               title="Toggle theme"
             >
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
+              <div className="flex items-center gap-2">
+                {theme === "dark" ? (
+                  <>
+                    <Moon className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                    <span>Dark Mode</span>
+                  </>
+                ) : (
+                  <>
+                    <Sun className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                    <span>Day Mode</span>
+                  </>
+                )}
+              </div>
+              <div className="h-4 w-7 rounded-full bg-slate-200 dark:bg-slate-800 p-0.5 transition-colors relative flex items-center justify-start dark:justify-end">
+                <div className="h-3 w-3 rounded-full bg-white dark:bg-blue-400 shadow-sm" />
+              </div>
+            </button>
             <Button
               variant="outline"
               onClick={() => signOut()}
-              className="flex-1 rounded-lg text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs"
+              className="w-full rounded-xl text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs font-bold"
             >
               <LogOut className="mr-1.5 h-4 w-4" />
               Sign Out
@@ -929,7 +944,7 @@ function Dashboard() {
       </aside>
 
       {/* MOBILE SHEETS HEADER */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-16 border-b border-border bg-card/80 backdrop-blur-md z-40 flex items-center justify-between px-4">
+      <div className="md:hidden fixed top-0 left-0 right-0 h-16 border-b border-slate-200/50 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-40 flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
           <div className="rounded-lg bg-primary p-1.5 text-primary-foreground">
             <Briefcase className="h-5 w-5" />
@@ -945,8 +960,8 @@ function Dashboard() {
               <Menu className="h-5 w-5" />
             </Button>
           </SheetTrigger>
-          <SheetContent side="left" className="w-64 p-0 bg-card border-r border-border">
-            <div className="flex h-16 items-center border-b border-border px-6">
+          <SheetContent side="left" className="w-64 p-0 bg-white dark:bg-slate-900 border-r border-slate-200/50 dark:border-slate-800/80">
+            <div className="flex h-16 items-center border-b border-slate-200/50 dark:border-slate-800/80 px-6">
               <span className="text-base font-bold tracking-tight text-foreground">
                 Dashboard Menu
               </span>
@@ -959,7 +974,7 @@ function Dashboard() {
               <NavItem tab="applications" icon={Briefcase} label="Applications" />
               <NavItem tab="profile" icon={UserIcon} label="Profile" />
             </nav>
-            <div className="absolute bottom-0 left-0 right-0 border-t border-border p-4 space-y-3 bg-card/90">
+            <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200/50 dark:border-slate-800/80 p-4 space-y-3 bg-white/95 dark:bg-slate-900/95">
               <div className="flex items-center gap-3">
                 <div className="h-9 w-9 rounded-full bg-primary/15 flex items-center justify-center text-primary font-bold">
                   {profile?.full_name?.charAt(0).toUpperCase() ||
@@ -973,22 +988,36 @@ function Dashboard() {
                   <p className="truncate text-[10px] text-muted-foreground">{user?.email}</p>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
+              <div className="space-y-2">
+                <button
                   onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                  className="rounded-lg h-9 w-9"
+                  className="w-full flex items-center justify-between rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/20 px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-350 transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-900 active:scale-95 cursor-pointer shadow-inner"
+                  title="Toggle theme"
                 >
-                  {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                </Button>
+                  <div className="flex items-center gap-2">
+                    {theme === "dark" ? (
+                      <>
+                        <Moon className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                        <span>Dark Mode</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sun className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                        <span>Day Mode</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="h-4 w-7 rounded-full bg-slate-200 dark:bg-slate-800 p-0.5 transition-colors relative flex items-center justify-start dark:justify-end">
+                    <div className="h-3 w-3 rounded-full bg-white dark:bg-blue-400 shadow-sm" />
+                  </div>
+                </button>
                 <Button
                   variant="outline"
                   onClick={() => {
                     setMobileMenuOpen(false);
                     signOut();
                   }}
-                  className="flex-1 rounded-lg text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs"
+                  className="w-full rounded-xl text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs font-bold"
                 >
                   <LogOut className="mr-1.5 h-4 w-4" />
                   Sign Out
@@ -1005,125 +1034,168 @@ function Dashboard() {
           {/* TAB: DASHBOARD */}
           {activeTab === "dashboard" && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
-      <div className="flex flex-col md:flex-row justify-between items-start bg-gray-50/80 rounded-3xl p-6 md:p-8 relative overflow-hidden text-left">
-  <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
-  <div className="space-y-2">
-    <span className="flex items-center gap-1 text-xs font-extrabold uppercase tracking-wider text-orange-600 bg-orange-100/30 px-2 py-0.5 rounded-md">
-      <Zap className="h-3 w-3" />
-      Smart Quick Actions
-    </span>
-    <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
-      Good Evening, <span className="text-primary">Rahul</span> 👋
-    </h1>
-    <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-      Ready to find your next opportunity? Scan your resume, scrape live job boards, and track your applications.
-    </p>
-  </div>
-  <div className="mt-4 md:mt-0 md:ml-6 w-full md:w-auto">
-    <Card className="p-4 border border-border bg-card shadow-sm rounded-xl space-y-2">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <FileText className="h-4 w-4" />
-        <span>{profile?.resume_name || "No resume uploaded"}</span>
-      </div>
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <BarChart2 className="h-4 w-4" />
-        <span>ATS Score: {profile?.ats_score ?? "‑"}%</span>
-      </div>
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Clock className="h-4 w-4" />
-        <span>Last login: {user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : "‑"}</span>
-      </div>
-    </Card>
-  </div>
-</div>
-
-              {/* Metric Grid */}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {[
-                  { title: "Profile Strength", value: "85%", desc: "3 suggestions remaining", icon: "📈", color: "text-blue-500 bg-blue-500/10 border-blue-500/10" },
-                  { title: "Resume Status", value: profile?.resume_name ? "Uploaded ✓" : "Missing ❌", desc: profile?.resume_name || "No active resume", icon: "📄", color: "text-emerald-500 bg-emerald-500/10 border-emerald-500/10" },
-                  { title: "Saved Bookmarks", value: String(savedJobs.length), desc: "Direct scraper roles", icon: "🔖", color: "text-purple-500 bg-purple-500/10 border-purple-500/10" },
-                  { title: "Tracked Applications", value: String(applications.length), desc: "Pipeline submissions", icon: "💼", color: "text-amber-500 bg-amber-500/10 border-amber-500/10" }
-                ].map((metric, idx) => (
-                  <Card key={idx} className="p-4 border border-border bg-card shadow-sm text-left flex items-start justify-between rounded-xl transition-all duration-300 hover:-translate-y-1 hover:shadow-md cursor-default">
-                    <div className="space-y-1.5 min-w-0">
-                      <span className="text-[10px] font-extrabold text-muted-foreground uppercase tracking-wider block">{metric.title}</span>
-                      <span className="text-2xl font-black text-foreground block">{metric.value}</span>
-                      <span className="text-[10px] text-muted-foreground truncate block font-medium">{metric.desc}</span>
+              {/* Dynamic Welcome Card */}
+              <div className="flex flex-col md:flex-row justify-between items-start bg-slate-100/60 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/80 rounded-[32px] p-6 md:p-8 relative overflow-hidden text-left shadow-sm">
+                <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
+                <div className="space-y-3 flex-1">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#eff6ff] dark:bg-blue-950/40 border border-blue-200/50 dark:border-blue-900/40 px-3 py-1 text-[11px] font-bold text-[#3b82f6] dark:text-blue-400 shadow-sm">
+                    <span className="text-[12px] opacity-90 leading-none">#</span>
+                    <span>Workspace Active</span>
+                  </span>
+                  <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                    Good Evening, <span className="text-[#3b82f6]">{profile?.full_name || "Rahul"}</span> 👋
+                  </h1>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xl font-medium leading-relaxed">
+                    Ready to find your next opportunity? Scan your resume, scrape live job boards, and track your applications.
+                  </p>
+                </div>
+                <div className="mt-6 md:mt-0 md:ml-6 w-full md:w-64 shrink-0">
+                  <div className="bg-white/80 dark:bg-slate-950/40 border border-slate-200/40 dark:border-slate-800/40 rounded-[20px] p-4 space-y-2.5 shadow-sm text-xs">
+                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
+                      <span>Resume Status</span>
+                      <span className={profile?.resume_name ? "font-bold text-emerald-600 dark:text-emerald-400" : "font-bold text-slate-400"}>
+                        {profile?.resume_name ? "Uploaded ✓" : "Not Uploaded ❌"}
+                      </span>
                     </div>
-                    <div className={["h-9 w-9 rounded-xl flex items-center justify-center text-sm border font-extrabold shrink-0 shadow-inner", metric.color].join(" ")}>
-                      {metric.icon}
+                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
+                      <span>ATS Match Rank</span>
+                      <span className="font-bold text-primary dark:text-blue-400">
+                        {profile?.ats_score ? `${profile.ats_score}%` : "71%"}
+                      </span>
                     </div>
-                  </Card>
-                ))}
+                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
+                      <span>Last Login</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">
+                        {user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : "28/5/2026"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* Two Column Grid */}
-              <div className="grid gap-6 md:grid-cols-3">
-                {/* Active Applications list */}
-                <div className="md:col-span-2 space-y-4">
-                  <Card className="p-5 border border-border bg-card shadow-sm rounded-xl text-left space-y-4 transition-all duration-300 hover:shadow-md">
-                    <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                      <div>
-                        <h3 className="font-extrabold text-foreground text-sm">Active Applications Pipeline</h3>
-                        <p className="text-[10px] text-muted-foreground">Recent status updates from your tracking board.</p>
+              {/* Dynamic Stats Grid */}
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  {
+                    title: "JOBS MATCHED",
+                    value: String(jobs.length || 8),
+                    icon: Sparkles,
+                    color: "text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-100/50 dark:border-blue-900/20"
+                  },
+                  {
+                    title: "APPLICATIONS SENT",
+                    value: String(applications.length),
+                    icon: Briefcase,
+                    color: "text-purple-600 bg-purple-50 dark:bg-purple-950/40 border-purple-100/50 dark:border-purple-900/20"
+                  },
+                  {
+                    title: "SAVED JOBS",
+                    value: String(savedJobs.length || 2),
+                    icon: Bookmark,
+                    color: "text-amber-600 bg-amber-50 dark:bg-amber-950/40 border-amber-100/50 dark:border-amber-900/20"
+                  },
+                  {
+                    title: "PROFILE SCORE",
+                    value: profile?.ats_score ? `${profile.ats_score}%` : "80%",
+                    icon: Award,
+                    color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-100/50 dark:border-emerald-900/20"
+                  }
+                ].map((metric, idx) => {
+                  const Icon = metric.icon;
+                  return (
+                    <Card key={idx} className="p-4 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm text-left flex items-center gap-4 rounded-[24px] transition-all duration-300 hover:scale-[1.02] hover:shadow-md cursor-default">
+                      <div className={["h-12 w-12 rounded-full flex items-center justify-center shrink-0 border shadow-inner", metric.color].join(" ")}>
+                        <Icon className="h-5 w-5" />
                       </div>
-                      <Button onClick={() => setActiveTab("applications")} variant="ghost" size="sm" className="h-8 text-[10px] font-bold text-primary hover:bg-primary/5">
-                        Manage Board <ChevronRight className="ml-1 h-3 w-3" />
-                      </Button>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">{metric.title}</span>
+                        <span className="text-2xl font-black text-slate-800 dark:text-white block leading-none">{metric.value}</span>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              {/* Two Column Grid Layout */}
+              <div className="grid gap-6 md:grid-cols-3">
+                {/* Recent Scrape Matches */}
+                <div className="md:col-span-2">
+                  <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left flex flex-col justify-between h-full min-h-[300px]">
+                    <div>
+                      <h3 className="font-extrabold text-slate-850 dark:text-white text-base mb-6">Recent Scrape Matches</h3>
+                      
+                      {jobs.length === 0 ? (
+                        <div className="py-12 text-center text-xs text-slate-450 dark:text-slate-500 italic font-medium leading-relaxed max-w-sm mx-auto">
+                          No matches found yet. Go to the "Job Matcher" to upload your resume!
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {jobs.slice(0, 3).map((job, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-3 rounded-2xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20">
+                              <div className="min-w-0 flex-1">
+                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block truncate">{job.title}</span>
+                                <span className="text-[10px] text-slate-450 dark:text-slate-500 font-semibold">{job.company} • {job.location || "Remote"}</span>
+                              </div>
+                              <Badge className="font-extrabold text-[9px] px-2 py-0.5 rounded-lg shrink-0 bg-primary/10 text-primary border-primary/20" variant="outline">
+                                {job.score}
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
-                    {applications.length === 0 ? (
-                      <div className="py-8 text-center text-xs text-muted-foreground space-y-1.5">
-                        <span>No active submissions tracked.</span>
-                        <button onClick={() => setActiveTab("applications")} className="text-primary hover:underline font-semibold block mx-auto">Track an application now</button>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {applications.slice(0, 3).map((app) => (
-                          <div key={app.id} className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-muted/10">
-                            <div className="min-w-0">
-                              <span className="text-xs font-bold text-foreground block truncate">{app.role}</span>
-                              <span className="text-[10px] text-muted-foreground font-semibold">{app.company} • Applied {app.applied_at}</span>
-                            </div>
-                            <Badge className={["font-extrabold text-[9px] px-2 py-0.5 rounded-lg shrink-0",
-                              app.status === "Offer" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" :
-                                app.status === "Interviewing" ? "bg-primary/10 text-primary border-primary/20" :
-                                  app.status === "Rejected" ? "bg-destructive/10 text-destructive border-destructive/20" :
-                                    "bg-muted text-muted-foreground border-border"
-                            ].join(" ")} variant="outline">
-                              {app.status}
-                            </Badge>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <button
+                      onClick={() => setActiveTab("matcher")}
+                      className="w-full mt-4 flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 px-4 py-2.5 text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors active:scale-95"
+                    >
+                      View All Matches <ChevronRight className="h-3 w-3 shrink-0" />
+                    </button>
                   </Card>
                 </div>
 
-                {/* Quick AI Advisor Insights */}
-                <Card className="p-5 border border-border bg-card shadow-sm rounded-xl text-left space-y-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-md">
-                  <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                    <div>
-                      <h3 className="font-extrabold text-foreground text-sm">Advisor Bulletins</h3>
-                      <p className="text-[10px] text-muted-foreground">Automated career feedback tips.</p>
-                    </div>
-                    <Sparkles className="h-4 w-4 text-primary shrink-0 animate-pulse" />
-                  </div>
+                {/* Quick Tool Box */}
+                <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left">
+                  <h3 className="font-extrabold text-slate-850 dark:text-white text-base mb-6">Quick Tool Box</h3>
 
                   <div className="space-y-3">
-                    <div className="space-y-1.5 p-3 rounded-lg bg-primary/5 border border-primary/10">
-                      <span className="text-[9px] font-bold text-primary uppercase tracking-wider block">Resume Tip</span>
-                      <p className="text-[10px] text-muted-foreground leading-relaxed">
-                        {profile?.resume_name
-                          ? `Review suggestion generated for "${profile.resume_name}": frame achievements with the STAR framework to highlight exact metric results.`
-                          : "No resume detected! Upload your PDF in the Job Matcher to calculate keywords."}
-                      </p>
-                    </div>
-
-                    <Button onClick={() => setActiveTab("assistant")} className="w-full h-9 rounded-lg text-[10px] font-bold bg-primary text-primary-foreground hover:opacity-90 active:scale-95 shadow-sm flex items-center justify-center gap-1 transition-all duration-200">
-                      Launch AI Career Coach <ChevronRight className="h-3 w-3" />
-                    </Button>
+                    {[
+                      {
+                        title: "Job Matcher",
+                        icon: Sparkles,
+                        tab: "matcher" as ActiveTab,
+                        color: "text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-100/50 dark:border-blue-900/20"
+                      },
+                      {
+                        title: "Explore Board",
+                        icon: Search,
+                        tab: "saved" as ActiveTab,
+                        color: "text-purple-600 bg-purple-50 dark:bg-purple-950/40 border-purple-100/50 dark:border-purple-900/20"
+                      },
+                      {
+                        title: "Track Applications",
+                        icon: Briefcase,
+                        tab: "applications" as ActiveTab,
+                        color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-100/50 dark:border-emerald-900/20"
+                      }
+                    ].map((tool, idx) => {
+                      const ToolIcon = tool.icon;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => setActiveTab(tool.tab)}
+                          className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20 cursor-pointer transition-all duration-200 hover:border-primary/20 hover:bg-slate-50 dark:hover:bg-slate-950/40 hover:-translate-y-0.5 hover:shadow-sm"
+                        >
+                          <div className="flex items-center gap-3 text-xs font-bold text-slate-700 dark:text-slate-350">
+                            <div className={["h-8 w-8 rounded-full flex items-center justify-center shrink-0 border shadow-inner", tool.color].join(" ")}>
+                              <ToolIcon className="h-4 w-4" />
+                            </div>
+                            <span>{tool.title}</span>
+                          </div>
+                          <ChevronRight className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500" />
+                        </div>
+                      );
+                    })}
                   </div>
                 </Card>
               </div>
@@ -1569,22 +1641,34 @@ function Dashboard() {
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-6 text-left">
                   {chatMessages.length === 0 ? (
-                    <div className="h-full flex flex-col justify-start w-full py-6 space-y-5">
-                      {/* Header */}
-                      <div className="text-center space-y-1">
-                        <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center text-2xl mx-auto shadow-sm mb-3">
-                          🤖
-                        </div>
-                        <h2 className="text-lg font-extrabold text-foreground tracking-tight">AI Career Assistant</h2>
-                        <p className="text-[11px] text-muted-foreground leading-relaxed max-w-sm mx-auto">
-                          Ask anything about your resume, interviews, salary, or roadmap.
-                        </p>
+                    <div className="h-full flex flex-col justify-start w-full py-2 space-y-6">
+                      {/* Suggestion questions grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                        {[
+                          "\"Review my resume\"",
+                          "\"Improve my ATS score\"",
+                          "\"How can I get a software engineer job?\"",
+                          "\"What skills should I learn for AI Engineer roles?\"",
+                          "\"Prepare me for Java interviews\"",
+                          "\"Suggest projects for placements\""
+                        ].map((item, idx) => {
+                          const cleanedQuery = item.replace(/"/g, "");
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => handleSendMessage(cleanedQuery)}
+                              className="text-left py-3.5 px-4 rounded-[16px] border border-slate-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:border-slate-200 dark:hover:border-slate-700 active:scale-[0.99] transition-all duration-150 text-[13px] font-bold text-slate-800 dark:text-slate-200 shadow-sm"
+                            >
+                              {item}
+                            </button>
+                          );
+                        })}
                       </div>
 
                       {/* Quick Actions Label */}
-                      <div className="flex items-center gap-1.5 px-0.5">
-                        <Zap className="h-3.5 w-3.5 text-orange-500 fill-orange-400" />
-                        <span className="text-xs font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Smart Quick Actions</span>
+                      <div className="flex items-center gap-1.5 px-0.5 text-slate-700 dark:text-slate-300 font-extrabold text-xs tracking-wider uppercase mt-4 mb-2">
+                        <span className="text-orange-500 animate-pulse">⚡</span>
+                        <span>Smart Quick Actions</span>
                       </div>
 
                       {/* 9-card pastel grid */}
@@ -1592,64 +1676,64 @@ function Dashboard() {
                         {[
                           {
                             title: "Resume Review",
-                            desc: "Audit using the STAR framework for impact",
+                            desc: "Critical recommendations to boost callback rates.",
                             query: "Review my resume",
-                            bg: "bg-slate-100/70 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800/70",
+                            bg: "bg-blue-50/50 dark:bg-blue-950/20 border-blue-100/40 dark:border-blue-900/10 hover:border-blue-300 dark:hover:border-blue-700",
                           },
                           {
                             title: "ATS Score Check",
-                            desc: "Maximize recruiter algorithm visibility",
+                            desc: "Detailed analysis on parsing, formatting, and density.",
                             query: "Improve my ATS score",
-                            bg: "bg-gray-100/80 dark:bg-gray-800/40 hover:bg-gray-100 dark:hover:bg-gray-800/70",
-                          },
-                          {
-                            title: "Cover Letter Writer",
-                            desc: "Generate a tailored, high-callback letter",
-                            query: "Write a cover letter for me",
-                            bg: "bg-pink-50 dark:bg-pink-900/20 hover:bg-pink-100 dark:hover:bg-pink-900/40",
+                            bg: "bg-slate-50/50 dark:bg-slate-900/30 border-slate-100 dark:border-slate-800/20 hover:border-slate-300 dark:hover:border-slate-700",
                           },
                           {
                             title: "Skill Gap Analysis",
-                            desc: "Spot missing skills for your target role",
+                            desc: "Map your listed stack against top industry hiring filters.",
                             query: "What skills should I learn?",
-                            bg: "bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/40",
+                            bg: "bg-purple-50/50 dark:bg-purple-950/20 border-purple-100/40 dark:border-purple-900/10 hover:border-purple-300 dark:hover:border-purple-700",
                           },
                           {
                             title: "Interview Practice",
-                            desc: "Launch a live mock technical interview",
+                            desc: "Interactive multi-step simulator grading answers.",
                             query: "Start a mock interview",
-                            bg: "bg-teal-50 dark:bg-teal-900/20 hover:bg-teal-100 dark:hover:bg-teal-900/40",
+                            bg: "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100/40 dark:border-emerald-900/10 hover:border-emerald-300 dark:hover:border-emerald-700",
                           },
                           {
                             title: "Career Roadmap",
-                            desc: "Get a phased, timeline-based curriculum",
+                            desc: "Phased learning timelines and milestone strategies.",
                             query: "Suggest a career roadmap",
-                            bg: "bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/40",
+                            bg: "bg-amber-50/50 dark:bg-amber-950/20 border-amber-100/40 dark:border-amber-900/10 hover:border-amber-300 dark:hover:border-amber-700",
+                          },
+                          {
+                            title: "Job Recommendations",
+                            desc: "Resume-aware suggestions with custom matching weights.",
+                            query: "Give me job recommendations",
+                            bg: "bg-teal-50/50 dark:bg-teal-950/20 border-teal-100/40 dark:border-teal-900/10 hover:border-teal-300 dark:hover:border-teal-700",
                           },
                           {
                             title: "Salary Insights",
-                            desc: "Explore compensation ranges by role & city",
+                            desc: "Competitive analysis of compensation benchmarks.",
                             query: "What is the salary for my role?",
-                            bg: "bg-orange-50 dark:bg-orange-900/20 hover:bg-orange-100 dark:hover:bg-orange-900/40",
+                            bg: "bg-orange-50/50 dark:bg-orange-950/20 border-orange-100/40 dark:border-orange-900/10 hover:border-orange-300 dark:hover:border-orange-700",
                           },
                           {
-                            title: "LinkedIn Optimizer",
-                            desc: "Turn your profile into a recruiter magnet",
+                            title: "LinkedIn Optimization",
+                            desc: "Strategic headline, summary, and visibility audits.",
                             query: "LinkedIn tips",
-                            bg: "bg-sky-50 dark:bg-sky-900/20 hover:bg-sky-100 dark:hover:bg-sky-900/40",
+                            bg: "bg-sky-50/50 dark:bg-sky-950/20 border-sky-100/40 dark:border-sky-900/10 hover:border-sky-300 dark:hover:border-sky-700",
                           },
                           {
-                            title: "Profile Strength",
-                            desc: "Diagnose and boost your AI match score",
-                            query: "Improve my profile strength",
-                            bg: "bg-rose-50 dark:bg-rose-900/20 hover:bg-rose-100 dark:hover:bg-rose-900/40",
+                            title: "Cover Letter Generator",
+                            desc: "Custom-tailored letter templates targeting job openings.",
+                            query: "Write a cover letter for me",
+                            bg: "bg-rose-50/50 dark:bg-rose-950/20 border-rose-100/40 dark:border-rose-900/10 hover:border-rose-300 dark:hover:border-rose-700",
                           },
                         ].map((card, idx) => (
                           <div
                             key={idx}
                             onClick={() => handleSendMessage(card.query, card.title)}
                             className={[
-                              "group flex flex-col gap-1.5 p-3.5 rounded-xl border border-transparent cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm hover:border-black/5 dark:hover:border-white/10 text-left",
+                              "group flex flex-col gap-1.5 p-3.5 rounded-[16px] border border-transparent cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm text-left justify-between",
                               card.bg,
                             ].join(" ")}
                           >
@@ -1657,9 +1741,9 @@ function Dashboard() {
                               <span className="text-[13px] font-bold text-gray-900 dark:text-gray-100 leading-tight">
                                 {card.title}
                               </span>
-                              <ChevronRight className="h-3.5 w-3.5 text-gray-400 dark:text-gray-500 shrink-0 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
+                              <ChevronRight className="h-3.5 w-3.5 text-gray-450 dark:text-gray-500 shrink-0 group-hover:text-gray-650 dark:group-hover:text-gray-300 transition-colors" />
                             </div>
-                            <span className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed">
+                            <span className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed mt-1">
                               {card.desc}
                             </span>
                           </div>
@@ -1674,7 +1758,7 @@ function Dashboard() {
                           <div
                             key={msg.id}
                             className={[
-                              "flex gap-4 p-4 rounded-2xl transition-all border",
+                              "flex gap-4 p-4 rounded-2xl transition-all border text-left",
                               isAi
                                 ? "bg-muted/10 border-border/40 justify-start"
                                 : "bg-primary/5 border-primary/10 justify-end flex-row-reverse"
@@ -1724,25 +1808,25 @@ function Dashboard() {
                   )}
                 </div>
 
-                <div className="border-t border-border/50 p-4 bg-background">
+                <div className="border-t border-slate-200/50 dark:border-slate-800/80 p-4 bg-background">
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
                       handleSendMessage(chatInput);
                     }}
                   >
-                    <div className="flex items-center gap-2 bg-gray-50 dark:bg-muted/30 border border-gray-200 dark:border-border rounded-2xl px-4 py-2 transition-all duration-200 focus-within:ring-2 focus-within:ring-blue-100 dark:focus-within:ring-blue-900/40 focus-within:border-blue-300 dark:focus-within:border-blue-600">
+                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-full px-5 py-2.5 transition-all duration-200 focus-within:ring-2 focus-within:ring-primary/10 focus-within:border-primary/40">
                       <input
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
-                        placeholder="Ask about resume help, salary, skills gap, interviews..."
+                        placeholder="Ask anything about your career (e.g. 'Review my resume', 'Suggest projects')..."
                         disabled={isAssistantTyping}
-                        className="flex-1 bg-transparent text-sm text-foreground placeholder:text-gray-400 dark:placeholder:text-gray-500 outline-none border-none min-w-0 py-1.5"
+                        className="flex-1 bg-transparent text-sm text-foreground placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none border-none min-w-0 py-1"
                       />
                       <button
                         type="submit"
                         disabled={!chatInput.trim() || isAssistantTyping}
-                        className="shrink-0 bg-blue-500 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl w-11 h-10 flex items-center justify-center active:scale-95 transition-all duration-150 shadow-sm"
+                        className="shrink-0 bg-primary hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-full w-10 h-10 flex items-center justify-center active:scale-95 transition-all duration-150 shadow-sm"
                       >
                         <Send className="h-4 w-4" />
                       </button>
