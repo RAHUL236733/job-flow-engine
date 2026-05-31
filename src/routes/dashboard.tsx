@@ -274,6 +274,10 @@ function Dashboard() {
   });
 
   useEffect(() => {
+    if (streamingIntervalRef.current) {
+      clearInterval(streamingIntervalRef.current);
+      streamingIntervalRef.current = null;
+    }
     const savedMsgs = localStorage.getItem(`ai_chat_messages_${activeSessionId}`);
     if (savedMsgs) {
       setChatMessages(JSON.parse(savedMsgs));
@@ -373,6 +377,7 @@ function Dashboard() {
   const [parsedSkills, setParsedSkills] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const streamingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [savedJobsLoading, setSavedJobsLoading] = useState(false);
@@ -1063,32 +1068,32 @@ function Dashboard() {
     saveSessionMessages(activeSessionId, updatedMessages);
     setIsAssistantTyping(true);
 
-    setTimeout(() => {
+    // Build full response text based on action type
+    const buildResponseText = () => {
       let aiResponseText = "";
       let isRoadmap = false;
-      let roadmapData = undefined;
+      let roadmapData: ChatMessage["roadmapData"] = undefined;
       let isJobRecs = false;
-      let jobRecsData = undefined;
+      let jobRecsData: ChatMessage["jobRecsData"] = undefined;
       let isInterviewMode = false;
-      let interviewScore = undefined;
-      let interviewStrengths = undefined;
-      let interviewImprovements = undefined;
+      let interviewScore: number | undefined = undefined;
+      let interviewStrengths: string[] | undefined = undefined;
+      let interviewImprovements: string[] | undefined = undefined;
 
       const userSkills = (parsedSkills && parsedSkills.length > 0)
         ? parsedSkills.join(", ")
         : (profile?.skills || "Python, React, CSS, JavaScript, HTML, TypeScript");
       const resumeName = profile?.resume_name || "";
-      const name = profile?.full_name || "Rahul";
+      const name = profile?.full_name || "there";
 
       if (actionType === "Interview Practice" || promptText.toLowerCase().includes("interview") || assistantMode === "interview") {
         if (assistantMode !== "interview") {
           setAssistantMode("interview");
           setActiveInterviewStep(1);
-          aiResponseText = `### Technical Interview Practice Mode 🚀\n\nWelcome ** ${name}** !I will act as your technical interviewer.Let's start with your first question.\n\n**Question 1: Explain REST APIs and how they handle statelessness.**\n\n*Please type your answer below, and I will evaluate it.*`;
+          aiResponseText = `# 🚀 Technical Interview Practice Mode\n\nWelcome **${name}**! I will act as your technical interviewer today.\n\n---\n\n## Question 1\n\n**Explain REST APIs and how they handle statelessness.**\n\n> Please type your detailed answer below and I will evaluate it with a score, strengths, and improvement notes.`;
         } else {
           isInterviewMode = true;
           const userLen = promptText.length;
-
           if (activeInterviewStep === 1) {
             interviewScore = userLen > 80 ? 9 : userLen > 30 ? 7 : 5;
             interviewStrengths = [
@@ -1099,8 +1104,7 @@ function Dashboard() {
               "Specifically explain standard HTTP verbs/methods (GET, POST, PUT, DELETE) and their actions.",
               "Discuss how status codes (200 OK, 201 Created, 404 Not Found, 500 Server Error) convey resource state."
             ];
-
-            aiResponseText = `### Evaluation for Question 1 ✅\n\nThank you for your response! Below is your custom evaluation report.\n\nLet's proceed to the next question:\n\n**Question 2: What is the difference between SQL and NoSQL databases, and when would you choose one over the other?**`;
+            aiResponseText = `# ✅ Evaluation — Question 1\n\nThank you for your response! Here is your custom evaluation report.\n\n---\n\n## Question 2\n\n**What is the difference between SQL and NoSQL databases, and when would you choose one over the other?**`;
             setActiveInterviewStep(2);
           } else if (activeInterviewStep === 2) {
             interviewScore = userLen > 80 ? 8 : userLen > 30 ? 7 : 6;
@@ -1112,19 +1116,16 @@ function Dashboard() {
               "Reference ACID compliance guarantees in SQL databases for reliable transaction processing.",
               "Provide concrete industry examples like PostgreSQL/MySQL for SQL and MongoDB/Cassandra for NoSQL."
             ];
-
-            aiResponseText = `### Evaluation for Question 2 ✅\n\nSuperb database analysis! Here is your scoring report.\n\nThis completes your quick technical interview session! Click **Clear Chat** or ask me any general career questions to exit interview mode.`;
+            aiResponseText = `# ✅ Evaluation — Question 2\n\nSuperb database analysis! Here is your scoring report.\n\n---\n\n🎉 **You have completed your quick technical interview session!**\n\nClick **Clear Chat** or ask me any career questions to continue.`;
             setAssistantMode("chat");
             setActiveInterviewStep(0);
           }
         }
-      }
-      else if (actionType === "Career Roadmap" || promptText.toLowerCase().includes("roadmap") || promptText.toLowerCase().includes("become a")) {
+      } else if (actionType === "Career Roadmap" || promptText.toLowerCase().includes("roadmap") || promptText.toLowerCase().includes("become a")) {
         isRoadmap = true;
         let role = "AI Engineer";
         if (promptText.toLowerCase().includes("frontend")) role = "Frontend Developer";
         if (promptText.toLowerCase().includes("fullstack") || promptText.toLowerCase().includes("full stack")) role = "Fullstack Developer";
-
         if (role === "AI Engineer") {
           roadmapData = [
             { phase: "Phase 1", title: "Python Core Foundations", skills: ["Python syntax", "Object-Oriented Programming", "Data Structures", "APIs"], timeline: "Month 1-2" },
@@ -1148,10 +1149,8 @@ function Dashboard() {
             { phase: "Phase 4", title: "System Deployment & Testing", skills: ["Docker", "AWS / Vercel", "Jest", "CI/CD Pipelines"], timeline: "Month 9-12" }
           ];
         }
-
-        aiResponseText = `### Phased Career Roadmap for ${role} 🗺️\n\nI have generated a comprehensive learning curriculum tailored to help you transition into a senior **${role}** role successfully. Estimated learning timeline: **6-12 Months**.`;
-      }
-      else if (actionType === "Job Recommendations" || promptText.toLowerCase().includes("recommend") || promptText.toLowerCase().includes("job")) {
+        aiResponseText = `# 🗺️ Phased Career Roadmap — ${role}\n\nHere is a comprehensive learning curriculum tailored to help you transition into a **${role}** role. Estimated timeline: **6–12 Months**.`;
+      } else if (actionType === "Job Recommendations" || promptText.toLowerCase().includes("recommend") || promptText.toLowerCase().includes("job")) {
         isJobRecs = true;
         jobRecsData = [
           { title: "AI Research Engineer", company: "Google DeepMind", score: 95, matchReason: "Highly matches your background in Generative AI, Python scripting, and FastAPI integrations." },
@@ -1159,73 +1158,76 @@ function Dashboard() {
           { title: "Backend Engineer (FastAPI & Node)", company: "Vercel", score: 88, matchReason: "Matches your experience building scalable asynchronous REST APIs and backend routers." },
           { title: "Python Software Developer", company: "Stripe", score: 85, matchReason: "Perfect fit for your clean coding style, scripting expertise, and unit-testing systems." }
         ];
-
-        if (resumeName) {
-          aiResponseText = `### Personalized Job Recommendations 💼\n\nBased on your active resume **${resumeName}** and matching your skills (**${userSkills}**), here are the top target roles mapped to your profile rank:`;
-        } else {
-          aiResponseText = `### Personalized Job Recommendations 💼\n\n*Note: I did not find an active resume in your profile. You can upload one under the **Job Matcher** tab to get high-precision matches!* \n\nBased on your profile skills (**${userSkills}**), here are the top roles that best align with your background:`;
-        }
-      }
-      else if (actionType === "Resume Review" || promptText.toLowerCase().includes("resume review") || promptText.toLowerCase().includes("improve my resume")) {
+        aiResponseText = resumeName
+          ? `# 💼 Personalized Job Recommendations\n\nBased on your resume **${resumeName}** and skills (**${userSkills}**), here are your top matched roles:`
+          : `# 💼 Personalized Job Recommendations\n\n> ⚠️ No resume found. Upload one under **Job Matcher** for precision matching.\n\nBased on your profile skills (**${userSkills}**), here are the top roles for your background:`;
+      } else if (actionType === "Resume Review" || promptText.toLowerCase().includes("resume")) {
         const reviewText = careerAnalysis?.resumeReview;
         if (reviewText && reviewText.trim().length > 0) {
-          aiResponseText = `### Resume Review Report 📝\n\nBased on your parsed resume **${resumeName || "uploaded resume"}**, here is your personalized AI audit:\n\n${reviewText}`;
+          aiResponseText = `# 📝 Resume Review Report\n\nBased on your resume **${resumeName || "uploaded resume"}**, here is your personalized AI audit:\n\n---\n\n${reviewText}`;
         } else {
-          aiResponseText = `### Resume Review Report 📝\n\n${resumeName ? `I have thoroughly reviewed your uploaded resume **${resumeName}** against current tech hiring standards.` : `I reviewed your profile background. For a comprehensive audit, please upload your resume file (.pdf) under the **Job Matcher** tab.`}\n\n**Here are my critical suggestions to increase resume callbacks:**\n\n1. **Add Measurable Achievements**: Instead of *"Built APIs using FastAPI"*, use *"Designed and deployed 15+ asynchronous FastAPI endpoints, reducing response latency by 32%."*\n2. **Incorporate Certifications**: Highlight professional validations like AWS Certified Practitioner or React Specialist to stand out.\n3. **Strengthen Project Descriptions**: Frame descriptions using the **STAR method** (Situation, Task, Action, Result) with clear impact stats.\n4. **Prune Unused Tools**: Focus on key tech stacks related to your target roles to make your profile highly scannable by human recruiters.`;
+          aiResponseText = `# 📝 Resume Review Report\n\n${resumeName ? `I've thoroughly reviewed **${resumeName}** against current tech hiring standards.` : `Upload your resume under **Job Matcher** for a full audit.`}\n\n---\n\n## 🔑 Key Recommendations\n\n**1. Add Measurable Achievements**\nInstead of *"Built APIs using FastAPI"*, use *"Deployed 15+ asynchronous FastAPI endpoints, cutting response latency by 32%"*.\n\n**2. Incorporate Certifications**\nHighlight AWS Certified Cloud Practitioner, TensorFlow Developer, or similar validations prominently.\n\n**3. Use the STAR Framework**\nFrame all experience bullets using Situation → Task → Action → Result for maximum impact.\n\n**4. Optimize Keyword Density**\nEnsure your target tech stack (Docker, FastAPI, Kubernetes) appears 3–4× throughout the document.`;
         }
-      }
-      else if (actionType === "ATS Score Check" || promptText.toLowerCase().includes("ats score") || promptText.toLowerCase().includes("improve my ats")) {
+      } else if (actionType === "ATS Score Check" || promptText.toLowerCase().includes("ats")) {
         const score = atsScore || profile?.ats_score || 78;
         const feedbackText = careerAnalysis?.atsScore?.feedback;
         if (feedbackText && feedbackText.trim().length > 0) {
-          aiResponseText = `### ATS Suitability Audit 🎯\n\nYour current estimated ATS (Applicant Tracking System) scan score is **${score}%**.\n\n**Custom Optimization Recommendations to reach 95%+:**\n\n${feedbackText}`;
+          aiResponseText = `# 🎯 ATS Suitability Audit\n\nYour current ATS scan score: **${score}%**\n\n---\n\n## Custom Optimization Recommendations\n\n${feedbackText}`;
         } else {
-          aiResponseText = `### ATS Suitability Audit 🎯\n\nYour current estimated ATS (Applicant Tracking System) scan score is **${score}%**.\n\n**Key Optimization Recommendations to reach 95%+:**\n\n* **Keyword Density**: Ensure keywords matching your target role (e.g., Docker, FastAPI, Vector Databases) appear 3-4 times in natural contexts.\n* **Format Scanning**: Avoid complex multi-column grids, graphical tables, icons, and text boxes which confuse modern ATS scanners.\n* **Standardized Headers**: Use standard sections like "Professional Experience", "Technical Skills", and "Education" rather than generic headers.\n* **File Format**: Use standard text-based PDFs instead of rasterized images to guarantee complete keyword indexability.`;
+          aiResponseText = `# 🎯 ATS Suitability Audit\n\nYour current ATS (Applicant Tracking System) scan score: **${score}%**\n\n---\n\n## 🔧 Key Optimizations to Reach 95%+\n\n**• Keyword Density** — Target keywords (Docker, FastAPI, Vector DBs) should appear 3–4× in natural context.\n\n**• Format Compliance** — Avoid multi-column layouts, icons, and text boxes which confuse ATS parsers.\n\n**• Section Headers** — Use standard labels: "Professional Experience", "Technical Skills", "Education".\n\n**• File Format** — Submit text-based PDFs only. Avoid scanned image formats that skip indexing entirely.`;
         }
-      }
-      else if (actionType === "Skill Gap Analysis" || promptText.toLowerCase().includes("skill gap") || promptText.toLowerCase().includes("what skills")) {
+      } else if (actionType === "Skill Gap Analysis" || promptText.toLowerCase().includes("skill") || promptText.toLowerCase().includes("learn")) {
         const gapText = careerAnalysis?.skillGapAnalysis;
         if (gapText && gapText.trim().length > 0) {
-          aiResponseText = `### Skill Gap Analysis 📊\n\nBased on your active skillset, here is your personalized AI gap assessment:\n\n${gapText}`;
+          aiResponseText = `# 📊 Skill Gap Analysis\n\nHere is your personalized AI gap assessment:\n\n---\n\n${gapText}`;
         } else {
-          aiResponseText = `### Skill Gap Analysis 📊\n\nBased on your listed skills (**${userSkills}**) and mapping against industry trends for top AI/Software engineering hiring pipelines:\n\n**Your Current Core Skills:**\n${userSkills.split(",").map(s => `* ✓ ${s.trim()}`).join("\n")}\n\n**Recommended Target Skills to acquire next:**\n\n1. **Docker & Kubernetes**: Essential for containerizing applications and running microservices.\n2. **AWS Deployment**: Industry standard cloud computing and serverless execution models.\n3. **LangChain & LlamaIndex**: Critical frameworks for creating Generative AI agents and RAG search pipelines.\n4. **Vector Databases (Pinecone, pgvector)**: The foundational indexing systems behind modern LLM search.\n\n*Learning Recommendation: Try building a RAG application using FastAPI, LangChain, and pgvector to master 3 of these skills in one project!*`;
+          aiResponseText = `# 📊 Skill Gap Analysis\n\nMapping your skills against top AI/Software engineering hiring standards:\n\n---\n\n## ✅ Your Current Strengths\n\n${userSkills.split(",").map(s => `- **${s.trim()}**`).join("\n")}\n\n---\n\n## 🚀 Priority Skills to Acquire Next\n\n**1. Docker & Kubernetes** — Essential for containerizing and deploying modern microservices.\n\n**2. AWS / Cloud Deployment** — Industry-standard platform for serverless and scalable architectures.\n\n**3. LangChain & LlamaIndex** — Critical for building Generative AI agents and RAG pipelines.\n\n**4. Vector Databases (Pinecone, pgvector)** — The backbone of modern LLM-powered search systems.\n\n> 💡 *Build a RAG app with FastAPI + LangChain + pgvector to master 3 of these in one project!*`;
         }
-      }
-      else if (actionType === "Salary Insights" || promptText.toLowerCase().includes("salary") || promptText.toLowerCase().includes("how much do")) {
+      } else if (actionType === "Salary Insights" || promptText.toLowerCase().includes("salary") || promptText.toLowerCase().includes("how much")) {
         const salaryText = careerAnalysis?.salaryInsights;
         if (salaryText && salaryText.trim().length > 0) {
-          aiResponseText = `### Salary Insights Framework 💵\n\nBased on your parsed profile and target roles, here are your custom salary predictions:\n\n${salaryText}`;
+          aiResponseText = `# 💵 Salary Insights\n\nBased on your profile and target roles:\n\n---\n\n${salaryText}`;
         } else {
-          aiResponseText = `### Salary Insights Framework 💵\n\nHere are the average annual salary ranges for high-demand technology roles in top tech hubs:\n\n* **AI Engineer**: \n  * Entry: $115,000 - $140,000\n  * Mid-Level: $150,000 - $185,000\n  * Senior: $190,000 - $240,000+\n* **Machine Learning Engineer**: \n  * Entry: $110,000 - $135,000\n  * Mid: $145,000 - $180,000\n  * Senior: $190,000 - $230,000\n* **Full-Stack Developer**: \n  * Entry: $85,000 - $110,000\n  * Mid: $120,000 - $155,000\n  * Senior: $165,000 - $200,000\n\n*Note: Total compensation figures frequently include significant stock options, equity sign-ons, and performance bonuses.*`;
+          aiResponseText = `# 💵 Salary Insights Framework\n\nAverage annual compensation for top tech roles (US market):\n\n---\n\n## 🤖 AI / ML Engineer\n- **Entry:** $115,000 – $140,000\n- **Mid-Level:** $150,000 – $185,000\n- **Senior:** $190,000 – $240,000+\n\n## 💻 Full-Stack Developer\n- **Entry:** $85,000 – $110,000\n- **Mid-Level:** $120,000 – $155,000\n- **Senior:** $165,000 – $200,000\n\n## ☁️ DevOps / Cloud Engineer\n- **Entry:** $95,000 – $120,000\n- **Mid-Level:** $130,000 – $165,000\n- **Senior:** $175,000 – $220,000\n\n> 📌 *Total comp often includes equity, bonuses, and stock grants — negotiate for the full package!*`;
         }
-      }
-      else if (actionType === "LinkedIn Optimization" || promptText.toLowerCase().includes("linkedin")) {
+      } else if (actionType === "LinkedIn Optimization" || promptText.toLowerCase().includes("linkedin")) {
         const linkedinText = careerAnalysis?.linkedinOptimization;
         if (linkedinText && linkedinText.trim().length > 0) {
-          aiResponseText = `### LinkedIn Profile Optimization Guide 🌐\n\nTurn your LinkedIn profile into a recruiter magnet with your personalized suggestions:\n\n${linkedinText}`;
+          aiResponseText = `# 🌐 LinkedIn Profile Optimization\n\nYour personalized recruiter-magnet strategy:\n\n---\n\n${linkedinText}`;
         } else {
-          aiResponseText = `### LinkedIn Profile Optimization Guide 🌐\n\nTurn your LinkedIn profile into a recruiter magnet with these strategic enhancements:\n\n* **Headline Formula**: Instead of *"Student at College"*, use *"AI Engineer in training | Python, React, FastAPI | Building Generative AI Solutions"* to maximize search algorithm indexing.\n* **About Summary**: Craft a 3-paragraph summary stating (1) your passion and focus, (2) your primary technical toolkit, and (3) your active research/projects. End with a call to action: *"Open to software and AI engineering opportunities | Contact: ${user?.email || "email"}"*\n* **Featured Section**: Attach your custom AI Job Matcher landing page, resume PDF, and GitHub repository links directly to top visibility.\n* **Skills Section**: List exactly 50 technical skills, ensuring your top 3 are high-volume keywords related to your target jobs.`;
+          aiResponseText = `# 🌐 LinkedIn Profile Optimization Guide\n\nTransform your LinkedIn into a recruiter magnet with these power moves:\n\n---\n\n**• Headline Formula**\nDon't write *"Student at University"*. Write: *"AI Engineer | Python · React · FastAPI | Building GenAI Solutions"*\n\n**• About Summary Structure**\nParagraph 1: Your passion and mission. Paragraph 2: Your primary tech stack. Paragraph 3: What you're building + CTA.\n\n**• Featured Section**\nPin your best project, resume PDF, or GitHub profile at the very top for instant visibility.\n\n**• Skills Section**\nList 50 skills — ensure your top 3 are high-volume keywords matched to your target roles.\n\n**• Consistency**\nYour LinkedIn headline, resume headline, and portfolio bio should all tell the same story.`;
         }
-      }
-      else if (actionType === "Cover Letter Generator" || promptText.toLowerCase().includes("cover letter")) {
+      } else if (actionType === "Cover Letter Generator" || promptText.toLowerCase().includes("cover letter")) {
         const letterText = careerAnalysis?.coverLetter;
         if (letterText && letterText.trim().length > 0) {
-          aiResponseText = `### Custom Cover Letter Generator ✉️\n\nHere is your custom tailored cover letter template mapped to your skills:\n\n***\n\n${letterText}\n\n***`;
+          aiResponseText = `# ✉️ Custom Cover Letter\n\nHere is your tailored cover letter, ready to personalize and send:\n\n---\n\n${letterText}\n\n---`;
         } else {
-          aiResponseText = `### Custom Cover Letter Generator ✉️\n\nHere is a highly professional, impact-driven cover letter template mapped to your skills:\n\n***\n\n**Subject: Application for Software / AI Engineer Role**\n\nDear Hiring Team,\n\nI am writing to express my strong interest in the Software / AI Engineer position. With a robust technical foundation in **${userSkills}**, alongside hands-on experience building scalable applications, I am eager to contribute to your engineering team.\n\nIn my recent work, I built and integrated asynchronous microservices, focused on maximizing response efficiency. Specifically, I leverage systems like FastAPI and Generative AI, matching features to precise client specifications. This experience has taught me how to bridge complex algorithmic modeling with streamlined, user-first frontends.\n\nI am excited by your organization's commitment to pushing tech boundaries, and I would love the chance to discuss how my skill set aligns with your current team goals. Thank you for your time and consideration.\n\nSincerely,\n\n**${name}** \n${user?.email || "rahul@example.com"}  \n\n***`;
+          aiResponseText = `# ✉️ Custom Cover Letter Generator\n\nHere is a professional, impact-driven cover letter template:\n\n---\n\n**Subject: Application for Software / AI Engineer Role**\n\nDear Hiring Team,\n\nI am writing to express my strong interest in this engineering role. With a robust foundation in **${userSkills}**, and hands-on experience delivering scalable applications, I am excited to contribute to your team's mission.\n\nIn my recent work, I designed and shipped asynchronous API systems with FastAPI, integrated Generative AI components, and collaborated across frontend and backend layers. This cross-functional experience allows me to bridge technical complexity with user-first delivery.\n\nI'd love the opportunity to discuss how my background aligns with your current roadmap. Thank you for your time and consideration.\n\nWarm regards,\n**${name}**\n${user?.email || ""}\n\n---`;
         }
-      }
-      else if (actionType === "Improve my profile strength" || promptText.toLowerCase().includes("improve my profile strength")) {
-        aiResponseText = `### AI Profile Strength Diagnostics 📈\n\nYour current Profile Strength is ranked at **85%** (Very Good).\n\n**To reach 100% and rank at the top of recruiter searches, perform these actions:**\n\n1. **Add Certifications**: Acquire validations such as *AWS Certified Cloud Practitioner* or *DeepLearning.AI TensorFlow Developer*.\n2. **Incorporate Capstone Projects**: Build a full-stack RAG pipeline with FastAPI and deploy it to a live environment (e.g. Hugging Face, Vercel).\n3. **Complete LinkedIn Summary**: Audit your About summary to include keywords optimized specifically for high-callback search hits.\n\n*Would you like me to guide you through building a capstone RAG project or drafting your LinkedIn summary? Just ask!*`;
-      }
-      else {
-        aiResponseText = `### AI Career Coaching Advice 🤖\n\nHello **${name}**! I'm here to support your career journey. I can assist you in optimization across job applications, technical questions, resume updates, and interview preparations.\n\n**You mentioned:** *"${promptText}"*\n\nBased on your active skills (**${userSkills}**), here is my general advice:\n\n* **Continuous Learning**: Leverage modern tools like FastAPI, Docker, and LangChain to create functional, deployed fullstack applications. This is the single best way to impress hiring managers.\n* **Portfolio Scannability**: Ensure your GitHub has a clean README detailing what your applications accomplish, what stack you used, and how to run them locally in under 3 minutes.\n* **Networking Strategy**: Reach out to senior jobs on LinkedIn in your target fields, asking structured, specific technical questions. This often leads to referrals!*`;
+      } else {
+        aiResponseText = `# 🤖 AI Career Coach\n\nHello **${name}**! I'm here to accelerate your career journey.\n\n---\n\n**You asked:** *"${promptText}"*\n\n## 💡 General Career Advice\n\n**• Build Deployed Projects** — Deployed apps with live URLs impress hiring managers far more than local demos.\n\n**• Optimize Your GitHub** — Clean READMEs, consistent commits, and pinned repos signal professionalism immediately.\n\n**• Network Strategically** — Send 3–5 targeted LinkedIn messages weekly to engineers in your target field. This is how most referrals happen.\n\n**• Track Everything** — Use the **Applications Tracker** tab to monitor your pipeline and follow up consistently.\n\n> Ask me anything — resume feedback, salary negotiation, interview prep, or career planning!`;
       }
 
-      const aiMsg: ChatMessage = {
-        id: `msg-${Date.now()}-ai`,
+      return { aiResponseText, isRoadmap, roadmapData, isJobRecs, jobRecsData, isInterviewMode, interviewScore, interviewStrengths, interviewImprovements };
+    };
+
+    // Short artificial thinking delay, then stream word by word
+    setTimeout(() => {
+      const { aiResponseText, isRoadmap, roadmapData, isJobRecs, jobRecsData, isInterviewMode, interviewScore, interviewStrengths, interviewImprovements } = buildResponseText();
+
+      const msgId = `msg-${Date.now()}-ai`;
+      const words = aiResponseText.split(" ");
+      let wordIdx = 0;
+      let streamedText = "";
+
+      // Initial typing indicator
+      setIsAssistantTyping(false);
+
+      // Insert placeholder message
+      const placeholderMsg: ChatMessage = {
+        id: msgId,
         sender: "ai",
-        text: aiResponseText,
+        text: "",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isRoadmap,
         roadmapData,
@@ -1237,10 +1239,34 @@ function Dashboard() {
         interviewImprovements,
       };
 
-      const finalMessages = [...updatedMessages, aiMsg];
-      saveSessionMessages(activeSessionId, finalMessages);
-      setIsAssistantTyping(false);
-    }, 1500);
+      setChatMessages(prev => {
+        const msgs = [...prev, placeholderMsg];
+        localStorage.setItem(`ai_chat_messages_${activeSessionId}`, JSON.stringify(msgs));
+        return msgs;
+      });
+
+      // Clear any previous streaming interval
+      if (streamingIntervalRef.current) {
+        clearInterval(streamingIntervalRef.current);
+      }
+
+      streamingIntervalRef.current = setInterval(() => {
+        if (wordIdx >= words.length) {
+          clearInterval(streamingIntervalRef.current!);
+          streamingIntervalRef.current = null;
+          return;
+        }
+        streamedText += (wordIdx === 0 ? "" : " ") + words[wordIdx];
+        wordIdx++;
+        setChatMessages(prev => {
+          const msgs = prev.map(m =>
+            m.id === msgId ? { ...m, text: streamedText } : m
+          );
+          localStorage.setItem(`ai_chat_messages_${activeSessionId}`, JSON.stringify(msgs));
+          return msgs;
+        });
+      }, 28);
+    }, 600);
   };
 
   const handleClearChat = () => {
@@ -1429,25 +1455,105 @@ function Dashboard() {
   };
 
   const renderFormattedText = (text: string) => {
-    return text.split("\n").map((line, idx) => {
-      let content = line;
-      let className = "text-sm text-muted-foreground leading-relaxed mt-1";
+    const lines = text.split("\n");
+    const elements: React.ReactNode[] = [];
 
-      if (content.startsWith("### ")) {
-        content = content.replace("### ", "");
-        className = "text-base font-extrabold text-foreground tracking-tight mt-4 mb-2 first:mt-0";
-      }
-
-      const parts = content.split(/(\*\*[^*]+\*\*)/g);
-      const parsedLine = parts.map((part, pidx) => {
+    const parseInline = (content: string, keyPrefix: string) => {
+      // Parse bold (**text**) and italic (*text*) inline
+      const parts = content.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
+      return parts.map((part, pidx) => {
+        const k = `${keyPrefix}-${pidx}`;
         if (part.startsWith("**") && part.endsWith("**")) {
-          return <strong key={pidx} className="font-extrabold text-foreground">{part.slice(2, -2)}</strong>;
+          return <strong key={k} className="font-bold text-foreground">{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith("*") && part.endsWith("*") && !part.startsWith("**")) {
+          return <em key={k} className="italic text-muted-foreground">{part.slice(1, -1)}</em>;
+        }
+        if (part.startsWith("`") && part.endsWith("`")) {
+          return <code key={k} className="bg-muted px-1.5 py-0.5 rounded text-[11px] font-mono text-primary">{part.slice(1, -1)}</code>;
         }
         return part;
       });
+    };
 
-      return <p key={idx} className={className}>{parsedLine}</p>;
-    });
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx];
+
+      // H1: # heading
+      if (line.startsWith("# ")) {
+        elements.push(
+          <h2 key={idx} className="text-[22px] font-black text-foreground tracking-tight mt-5 mb-3 first:mt-1 leading-tight">
+            {line.replace(/^# /, "")}
+          </h2>
+        );
+        continue;
+      }
+      // H2: ## heading
+      if (line.startsWith("## ")) {
+        elements.push(
+          <h3 key={idx} className="text-[16px] font-extrabold text-foreground tracking-tight mt-4 mb-2 border-b border-border/30 pb-1">
+            {line.replace(/^## /, "")}
+          </h3>
+        );
+        continue;
+      }
+      // H3: ### heading
+      if (line.startsWith("### ")) {
+        elements.push(
+          <h4 key={idx} className="text-[14px] font-bold text-foreground mt-3 mb-1.5">
+            {line.replace(/^### /, "")}
+          </h4>
+        );
+        continue;
+      }
+      // Horizontal rule
+      if (line.trim() === "---") {
+        elements.push(<hr key={idx} className="border-border/40 my-3" />);
+        continue;
+      }
+      // Blockquote: > text
+      if (line.startsWith("> ")) {
+        elements.push(
+          <blockquote key={idx} className="border-l-4 border-primary/40 pl-3 py-1 my-2 bg-primary/5 rounded-r-lg">
+            <p className="text-sm text-muted-foreground italic">{parseInline(line.replace(/^> /, ""), `bq-${idx}`)}</p>
+          </blockquote>
+        );
+        continue;
+      }
+      // Ordered list: 1. item
+      if (/^\d+\.\s/.test(line)) {
+        elements.push(
+          <div key={idx} className="flex gap-2 items-start mt-1.5">
+            <span className="text-primary font-bold text-xs mt-0.5 shrink-0">{line.match(/^(\d+)\./)![1]}.</span>
+            <p className="text-sm text-muted-foreground leading-relaxed">{parseInline(line.replace(/^\d+\.\s/, ""), `ol-${idx}`)}</p>
+          </div>
+        );
+        continue;
+      }
+      // Unordered list: - item or • item or * item
+      if (/^[-•*]\s/.test(line)) {
+        elements.push(
+          <div key={idx} className="flex gap-2 items-start mt-1.5">
+            <span className="text-primary font-black text-sm mt-0 shrink-0">•</span>
+            <p className="text-sm text-muted-foreground leading-relaxed">{parseInline(line.replace(/^[-•*]\s/, ""), `ul-${idx}`)}</p>
+          </div>
+        );
+        continue;
+      }
+      // Empty line
+      if (line.trim() === "") {
+        elements.push(<div key={idx} className="h-1" />);
+        continue;
+      }
+      // Default paragraph
+      elements.push(
+        <p key={idx} className="text-sm text-muted-foreground leading-relaxed mt-1">
+          {parseInline(line, `p-${idx}`)}
+        </p>
+      );
+    }
+
+    return elements;
   };
 
   return (
@@ -1628,7 +1734,7 @@ function Dashboard() {
                     <span>Workspace Active</span>
                   </span>
                   <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                    Good Evening, <span className="text-[#3b82f6]">{profile?.full_name || "Rahul"}</span> 👋
+                    Welcome, <span className="text-[#3b82f6]">{profile?.full_name || "Rahul"}</span> 👋
                   </h1>
                   <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xl font-medium leading-relaxed">
                     Ready to find your next opportunity? Scan your resume, scrape live job boards, and track your applications.
@@ -1739,49 +1845,44 @@ function Dashboard() {
                   </Card>
                 </div>
 
-                {/* Quick Tool Box */}
-                <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left">
-                  <h3 className="font-extrabold text-slate-850 dark:text-white text-base mb-6">Quick Tool Box</h3>
-
-                  <div className="space-y-3">
-                    {[
-                      {
-                        title: "Job Matcher",
-                        icon: Sparkles,
-                        tab: "matcher" as ActiveTab,
-                        color: "text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-100/50 dark:border-blue-900/20"
-                      },
-                      {
-                        title: "Explore Board",
-                        icon: Search,
-                        tab: "saved" as ActiveTab,
-                        color: "text-purple-600 bg-purple-50 dark:bg-purple-950/40 border-purple-100/50 dark:border-purple-900/20"
-                      },
-                      {
-                        title: "Track Applications",
-                        icon: Briefcase,
-                        tab: "applications" as ActiveTab,
-                        color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-100/50 dark:border-emerald-900/20"
-                      }
-                    ].map((tool, idx) => {
-                      const ToolIcon = tool.icon;
-                      return (
-                        <div
-                          key={idx}
-                          onClick={() => setActiveTab(tool.tab)}
-                          className="flex items-center justify-between p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20 cursor-pointer transition-all duration-200 hover:border-primary/20 hover:bg-slate-50 dark:hover:bg-slate-950/40 hover:-translate-y-0.5 hover:shadow-sm"
-                        >
-                          <div className="flex items-center gap-3 text-xs font-bold text-slate-700 dark:text-slate-350">
-                            <div className={["h-8 w-8 rounded-full flex items-center justify-center shrink-0 border shadow-inner", tool.color].join(" ")}>
-                              <ToolIcon className="h-4 w-4" />
-                            </div>
-                            <span>{tool.title}</span>
-                          </div>
-                          <ChevronRight className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500" />
-                        </div>
-                      );
-                    })}
+                {/* AI Career Coach Launcher */}
+                <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left flex flex-col gap-4">
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 dark:text-white text-base">AI Career Coach</h3>
+                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 font-medium">Click any tool to chat instantly</p>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { label: "ATS Audit", icon: "🎯", action: "ATS Score Check", query: "Check my ATS score" },
+                      { label: "Resume Review", icon: "📝", action: "Resume Review", query: "Review my resume" },
+                      { label: "Skill Gap", icon: "📊", action: "Skill Gap Analysis", query: "Analyze my skill gaps" },
+                      { label: "Roadmap", icon: "🗺️", action: "Career Roadmap", query: "Give me a career roadmap" },
+                      { label: "Interview Prep", icon: "🚀", action: "Interview Practice", query: "Start a mock interview" },
+                      { label: "Salary Info", icon: "💵", action: "Salary Insights", query: "What is the salary for my role?" },
+                    ].map((tool, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setActiveTab("assistant");
+                          setTimeout(() => handleSendMessage(tool.query, tool.action), 50);
+                        }}
+                        className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20 cursor-pointer transition-all duration-200 hover:border-primary/30 hover:bg-primary/5 hover:-translate-y-0.5 hover:shadow-sm text-left"
+                      >
+                        <span className="text-base shrink-0">{tool.icon}</span>
+                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 leading-tight">{tool.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => setActiveTab("assistant")}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-bold text-primary hover:bg-primary/10 transition-colors"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Open AI Coach
+                    <ChevronRight className="h-3 w-3" />
+                  </button>
                 </Card>
               </div>
             </div>
@@ -1958,31 +2059,24 @@ function Dashboard() {
 
               {matcherPhase === "results" && (
                 <div className="space-y-8 animate-in fade-in-50 duration-500">
-                  {/* Results Tab Bar */}
-                  <div className="flex flex-wrap gap-2 border-b border-border pb-3 text-left">
-                    {[
-                      { id: "jobs", label: "Job & Internship Matches", icon: Briefcase },
-                      { id: "resume", label: "Resume Audit & Keywords", icon: FileText },
-                      { id: "career", label: "AI Career Strategy", icon: Sparkles },
-                      { id: "tools", label: "Prep & Generators", icon: Zap }
-                    ].map((tab) => {
-                      const Icon = tab.icon;
-                      const isActive = resultsSubTab === tab.id;
-                      return (
-                        <button
-                          key={tab.id}
-                          onClick={() => setResultsSubTab(tab.id as any)}
-                          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                            isActive
-                              ? "bg-primary text-primary-foreground shadow-sm scale-[1.02]"
-                              : "bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          <Icon className="h-3.5 w-3.5" />
-                          {tab.label}
-                        </button>
-                      );
-                    })}
+                  {/* Results Header with AI Coach Banner */}
+                  <div className="flex flex-col gap-4 text-left">
+                    <div className="flex items-center gap-3 p-4 rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/5 via-blue-500/5 to-purple-500/5 shadow-sm">
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <Sparkles className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-extrabold text-foreground">Get Deeper AI Analysis</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Your resume data is ready — ask the AI Coach for ATS audit, skill gaps, salary insights, and more.</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab("assistant")}
+                        className="shrink-0 flex items-center gap-1 rounded-xl bg-primary text-primary-foreground text-xs font-bold px-3 py-2 hover:opacity-90 transition-all active:scale-95"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        AI Coach
+                      </button>
+                    </div>
                   </div>
 
                   {/* TAB 1 PANEL: JOBS & INTERNSHIPS */}
@@ -2656,41 +2750,114 @@ function Dashboard() {
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="space-y-5">
                       {chatMessages.map((msg) => {
                         const isAi = msg.sender === "ai";
                         return (
                           <div
                             key={msg.id}
                             className={[
-                              "flex gap-4 p-4 rounded-2xl transition-all border text-left",
-                              isAi
-                                ? "bg-muted/10 border-border/40 justify-start"
-                                : "bg-primary/5 border-primary/10 justify-end flex-row-reverse"
+                              "flex gap-3 text-left",
+                              isAi ? "justify-start items-start" : "justify-end items-end flex-row-reverse"
                             ].join(" ")}
                           >
+                            {/* Avatar */}
                             <div className={[
-                              "h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
-                              isAi ? "bg-primary/15 text-primary" : "bg-foreground text-background"
+                              "h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 mt-0.5 ring-2",
+                              isAi
+                                ? "bg-gradient-to-br from-primary/80 to-blue-500/80 text-white ring-primary/20"
+                                : "bg-gradient-to-br from-slate-700 to-slate-900 text-white ring-slate-500/20 dark:from-slate-600 dark:to-slate-800"
                             ].join(" ")}>
-                              {isAi ? "AI" : "Me"}
+                              {isAi ? "✦" : (profile?.full_name?.charAt(0).toUpperCase() || "U")}
                             </div>
-                            <div className="space-y-2 flex-1 min-w-0 max-w-2xl text-left">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-bold text-foreground">
-                                  {isAi ? "AI Career Advisor" : "You"}
+
+                            {/* Bubble */}
+                            <div className={[
+                              "max-w-[82%] rounded-2xl px-5 py-4 space-y-1 shadow-sm",
+                              isAi
+                                ? "bg-white dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700/60 rounded-tl-sm"
+                                : "bg-primary text-primary-foreground rounded-tr-sm"
+                            ].join(" ")}>
+                              {/* Header */}
+                              <div className="flex items-center gap-2 mb-2">
+                                <span className={["text-[10px] font-extrabold tracking-wide", isAi ? "text-primary" : "text-primary-foreground/80"].join(" ")}>
+                                  {isAi ? "✦ AI Career Coach" : "You"}
                                 </span>
-                                <span className="text-[9px] text-muted-foreground">{msg.timestamp}</span>
+                                <span className={["text-[9px]", isAi ? "text-muted-foreground" : "text-primary-foreground/60"].join(" ")}>{msg.timestamp}</span>
                               </div>
-                              <div className="space-y-1">
-                                {isAi ? (
-                                  <div className="prose prose-sm dark:prose-invert">
-                                    {renderFormattedText(msg.text)}
-                                  </div>
-                                ) : (
-                                  <p className="text-sm text-foreground leading-relaxed">{msg.text}</p>
-                                )}
-                              </div>
+
+                              {/* Content */}
+                              {isAi ? (
+                                <div className="space-y-0.5">
+                                  {msg.text ? renderFormattedText(msg.text) : (
+                                    <div className="flex items-center gap-1.5 py-1">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]"></span>
+                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]"></span>
+                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce"></span>
+                                    </div>
+                                  )}
+                                  {/* Roadmap Cards */}
+                                  {msg.isRoadmap && msg.roadmapData && (
+                                    <div className="mt-4 space-y-2">
+                                      {msg.roadmapData.map((phase, pIdx) => (
+                                        <div key={pIdx} className="flex gap-3 p-3 rounded-xl bg-primary/5 border border-primary/10">
+                                          <div className="flex flex-col items-center gap-1 shrink-0">
+                                            <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[10px] font-extrabold flex items-center justify-center">{pIdx + 1}</div>
+                                            {pIdx < (msg.roadmapData?.length ?? 0) - 1 && <div className="w-0.5 flex-1 bg-primary/10 mt-1 min-h-[12px]" />}
+                                          </div>
+                                          <div className="space-y-1">
+                                            <p className="text-[11px] font-bold text-foreground">{phase.title}</p>
+                                            {phase.timeline && <p className="text-[10px] text-primary font-semibold">{phase.timeline}</p>}
+                                            <div className="flex flex-wrap gap-1 mt-1">
+                                              {phase.skills.map((skill, sIdx) => (
+                                                <span key={sIdx} className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium text-muted-foreground">{skill}</span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {/* Job Rec Cards */}
+                                  {msg.isJobRecs && msg.jobRecsData && (
+                                    <div className="mt-4 space-y-2">
+                                      {msg.jobRecsData.map((job, jIdx) => (
+                                        <div key={jIdx} className="flex items-start justify-between gap-3 p-3 rounded-xl bg-muted/30 border border-border/40">
+                                          <div className="min-w-0 space-y-0.5">
+                                            <p className="text-[12px] font-bold text-foreground truncate">{job.title}</p>
+                                            <p className="text-[10px] text-muted-foreground font-semibold">{job.company}</p>
+                                            <p className="text-[11px] text-muted-foreground leading-relaxed">{job.matchReason}</p>
+                                          </div>
+                                          <span className="shrink-0 text-[10px] font-extrabold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{job.score}%</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {/* Interview Score */}
+                                  {msg.isInterviewMode && msg.interviewScore !== undefined && (
+                                    <div className="mt-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-900/30 space-y-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-lg font-black text-emerald-600">{msg.interviewScore}/10</span>
+                                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">Interview Score</span>
+                                      </div>
+                                      {msg.interviewStrengths && (
+                                        <div>
+                                          <p className="text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400 mb-1 uppercase tracking-wider">✅ Strengths</p>
+                                          {msg.interviewStrengths.map((s, i) => <p key={i} className="text-[11px] text-muted-foreground">• {s}</p>)}
+                                        </div>
+                                      )}
+                                      {msg.interviewImprovements && (
+                                        <div className="mt-1">
+                                          <p className="text-[10px] font-extrabold text-amber-600 dark:text-amber-400 mb-1 uppercase tracking-wider">💡 Improvements</p>
+                                          {msg.interviewImprovements.map((s, i) => <p key={i} className="text-[11px] text-muted-foreground">• {s}</p>)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-sm leading-relaxed text-primary-foreground">{msg.text}</p>
+                              )}
                             </div>
                           </div>
                         );

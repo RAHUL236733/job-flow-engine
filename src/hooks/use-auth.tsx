@@ -267,7 +267,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
-        toast.error("Authentication failed", { description: error.message });
+        if (error.message.includes("Email not confirmed")) {
+          toast.error("Email not confirmed", {
+            description: "Please check your inbox to confirm your address, or turn off 'Confirm email' in your Supabase Auth settings to log in instantly.",
+          });
+        } else {
+          toast.error("Authentication failed", { description: error.message });
+        }
         setIsLoading(false);
         return false;
       }
