@@ -120,6 +120,133 @@ const STEPS = [
 
 const ACCEPTED_EXTS = [".pdf", ".doc", ".docx"];
 
+const normalizeResumeData = (raw: any): any => {
+  if (!raw) return { skills: [], roles: [], experience: "", keywords: [] };
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      console.warn("Failed to parse resumeData string:", e);
+      return { skills: [], roles: [], experience: "", keywords: [] };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { skills: [], roles: [], experience: "", keywords: [] };
+  }
+
+  const getArr = (val: any): string[] => {
+    if (!val) return [];
+    if (Array.isArray(val)) return val.map(String);
+    if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
+    return [];
+  };
+
+  const getStr = (val: any): string => {
+    if (!val) return "";
+    if (Array.isArray(val)) return val.join("\n");
+    if (typeof val === "object") return JSON.stringify(val);
+    return String(val);
+  };
+
+  return {
+    skills: getArr(parsed.skills || []),
+    roles: getArr(parsed.roles || parsed.targetRoles || []),
+    experience: getStr(parsed.experience || parsed.experienceProfile || parsed.workHistory || ""),
+    keywords: getArr(parsed.keywords || [])
+  };
+};
+
+const normalizeCareerAnalysis = (raw: any): any => {
+  if (!raw) {
+    return {
+      resumeReview: "",
+      atsScore: { score: 0, feedback: "" },
+      skillGapAnalysis: "",
+      salaryInsights: "",
+      careerRoadmap: "",
+      linkedinOptimization: "",
+      interviewPractice: "",
+      coverLetter: "",
+      keywords: []
+    };
+  }
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      console.warn("Failed to parse careerAnalysis string:", e);
+      return {
+        resumeReview: "",
+        atsScore: { score: 0, feedback: "" },
+        skillGapAnalysis: "",
+        salaryInsights: "",
+        careerRoadmap: "",
+        linkedinOptimization: "",
+        interviewPractice: "",
+        coverLetter: "",
+        keywords: []
+      };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      resumeReview: "",
+      atsScore: { score: 0, feedback: "" },
+      skillGapAnalysis: "",
+      salaryInsights: "",
+      careerRoadmap: "",
+      linkedinOptimization: "",
+      interviewPractice: "",
+      coverLetter: "",
+      keywords: []
+    };
+  }
+
+  const getStr = (val: any): string => {
+    if (!val) return "";
+    if (Array.isArray(val)) return val.join("\n");
+    if (typeof val === "object") return JSON.stringify(val);
+    return String(val);
+  };
+
+  const getArr = (val: any): string[] => {
+    if (!val) return [];
+    if (Array.isArray(val)) return val.map(String);
+    if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
+    return [];
+  };
+
+  const atsScoreObj = parsed.atsScore || {};
+  let atsScoreScore = 0;
+  let atsScoreFeedback = "";
+
+  if (typeof atsScoreObj === "object" && atsScoreObj !== null) {
+    atsScoreScore = atsScoreObj.score !== undefined ? atsScoreObj.score : 0;
+    atsScoreFeedback = getStr(atsScoreObj.feedback);
+  } else if (typeof atsScoreObj === "number") {
+    atsScoreScore = atsScoreObj;
+  } else if (typeof atsScoreObj === "string") {
+    atsScoreScore = parseInt(atsScoreObj, 10) || 0;
+  }
+
+  return {
+    resumeReview: getStr(parsed.resumeReview || parsed.review),
+    atsScore: {
+      score: typeof atsScoreScore === "number" && !isNaN(atsScoreScore) ? atsScoreScore : 0,
+      feedback: atsScoreFeedback
+    },
+    skillGapAnalysis: getStr(parsed.skillGapAnalysis || parsed.skillGap || parsed.gaps),
+    salaryInsights: getStr(parsed.salaryInsights || parsed.salaries || parsed.salary),
+    careerRoadmap: getStr(parsed.careerRoadmap || parsed.roadmap || parsed.milestones),
+    linkedinOptimization: getStr(parsed.linkedinOptimization || parsed.linkedin || parsed.profileTips),
+    interviewPractice: getStr(parsed.interviewPractice || parsed.interviewQuestions || parsed.prep),
+    coverLetter: getStr(parsed.coverLetter || parsed.coverLetterTemplate || parsed.letter),
+    keywords: getArr(parsed.keywords || [])
+  };
+};
+
 function Dashboard() {
   const { user, profile, isLoading: authLoading, signOut, updateProfile, isMockMode, incrementTrialsUsed } = useAuth();
   const { theme, setTheme } = useTheme();
@@ -185,6 +312,25 @@ function Dashboard() {
   const saveApplications = (apps: Application[]) => {
     setApplications(apps);
     localStorage.setItem("user_applications", JSON.stringify(apps));
+
+    if (user) {
+      setUserStats(prev => {
+        if (!prev) return prev;
+        const updatedStats = { ...prev, applications_sent: apps.length };
+        if (isMockMode) {
+          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+        } else {
+          supabase
+            .from("user_stats")
+            .update({ applications_sent: apps.length })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to sync applications count:", error);
+            });
+        }
+        return updatedStats;
+      });
+    }
   };
 
   const addApplication = (company: string, role: string, status: AppStatus, location?: string) => {
@@ -220,8 +366,8 @@ function Dashboard() {
   const [stepIndex, setStepIndex] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [internships, setInternships] = useState<Job[]>([]);
-  const [resumeData, setResumeData] = useState<any>({});
-  const [careerAnalysis, setCareerAnalysis] = useState<any>({});
+  const [resumeData, setResumeData] = useState<any>(normalizeResumeData(null));
+  const [careerAnalysis, setCareerAnalysis] = useState<any>(normalizeCareerAnalysis(null));
   const [resultsSubTab, setResultsSubTab] = useState<"jobs" | "resume" | "career" | "tools">("jobs");
   const [atsScore, setAtsScore] = useState<number>(0);
   const [parsedSkills, setParsedSkills] = useState<string[]>([]);
@@ -360,12 +506,14 @@ function Dashboard() {
     if (extendedCached) {
       try {
         const parsed = JSON.parse(extendedCached);
+        const normResumeData = normalizeResumeData(parsed.resumeData);
+        const normCareerAnalysis = normalizeCareerAnalysis(parsed.careerAnalysis);
         setJobs(parsed.jobs || []);
         setInternships(parsed.internships || []);
-        setResumeData(parsed.resumeData || {});
-        setCareerAnalysis(parsed.careerAnalysis || {});
-        setAtsScore(parsed.atsScore || 0);
-        setParsedSkills(parsed.skills || []);
+        setResumeData(normResumeData);
+        setCareerAnalysis(normCareerAnalysis);
+        setAtsScore(Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 0);
+        setParsedSkills(parsed.skills || normResumeData.skills || []);
         setMatcherPhase("results");
 
         setUserStats(prev => {
@@ -373,7 +521,7 @@ function Dashboard() {
           const updatedStats = {
             ...prev,
             resume_uploaded: true,
-            ats_match_rank: parsed.atsScore || 0,
+            ats_match_rank: Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 0,
             jobs_matched: (parsed.jobs || []).length,
           };
           return updatedStats;
@@ -399,12 +547,14 @@ function Dashboard() {
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
+          const normResumeData = normalizeResumeData(parsed.resumeData);
+          const normCareerAnalysis = normalizeCareerAnalysis(parsed.careerAnalysis);
           setJobs(parsed.jobs || []);
           setInternships(parsed.internships || []);
-          setResumeData(parsed.resumeData || {});
-          setCareerAnalysis(parsed.careerAnalysis || {});
-          setAtsScore(parsed.atsScore || 75);
-          setParsedSkills(parsed.skills || []);
+          setResumeData(normResumeData);
+          setCareerAnalysis(normCareerAnalysis);
+          setAtsScore(Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 75);
+          setParsedSkills(parsed.skills || normResumeData.skills || []);
           setMatcherPhase("results");
 
           setUserStats(prev => {
@@ -412,7 +562,7 @@ function Dashboard() {
             const updatedStats = {
               ...prev,
               resume_uploaded: true,
-              ats_match_rank: parsed.atsScore || 75,
+              ats_match_rank: Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 75,
               jobs_matched: (parsed.jobs || []).length,
             };
             localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
@@ -437,6 +587,48 @@ function Dashboard() {
         const cachedJobs = data.jobs as Job[];
         setJobs(cachedJobs);
         setMatcherPhase("results");
+
+        // Retrieve latest ai_analysis from Supabase to populate resumeData & careerAnalysis states
+        supabase
+          .from("ai_analysis")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .then(({ data: analysisData, error: analysisErr }) => {
+            if (!analysisErr && analysisData) {
+              const reconstructedCareerAnalysis = {
+                resumeReview: analysisData.resume_review?.content || "",
+                atsScore: {
+                  score: analysisData.ats_score?.score || 0,
+                  feedback: analysisData.ats_score?.feedback || ""
+                },
+                skillGapAnalysis: analysisData.skill_gap_analysis?.content || "",
+                salaryInsights: analysisData.salary_insights?.content || "",
+                careerRoadmap: analysisData.career_roadmap?.content || "",
+                linkedinOptimization: analysisData.linkedin_optimization?.content || "",
+                interviewPractice: analysisData.interview_practice?.content || "",
+                coverLetter: analysisData.cover_letter_generator?.content || "",
+                keywords: []
+              };
+              
+              setCareerAnalysis(reconstructedCareerAnalysis);
+              setAtsScore(reconstructedCareerAnalysis.atsScore.score || profile?.ats_score || 75);
+              
+              // Also reconstruct resumeData
+              const reconstructedResumeData = {
+                skills: profile?.skills ? profile.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : [],
+                roles: [],
+                experience: analysisData.resume_review?.content || "",
+                keywords: []
+              };
+              setResumeData(reconstructedResumeData);
+              if (reconstructedResumeData.skills.length > 0) {
+                setParsedSkills(reconstructedResumeData.skills);
+              }
+            }
+          });
 
         setUserStats(prev => {
           if (!prev) return prev;
@@ -749,28 +941,67 @@ function Dashboard() {
         rawInternships = [];
       }
 
-      // ATS Score: careerAnalysis?.atsScore?.score || 0
-      const derivedScore = apiData.careerAnalysis?.atsScore?.score || 0;
-
-      // Skills: resumeData?.skills || []
-      let derivedSkills: string[] = [];
-      const skillsVal = apiData.resumeData?.skills || [];
-      if (Array.isArray(skillsVal)) {
-        derivedSkills = skillsVal.map(String);
-      } else if (typeof skillsVal === "string") {
-        derivedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
-      }
+      const normResumeData = normalizeResumeData(apiData.resumeData);
+      const normCareerAnalysis = normalizeCareerAnalysis(apiData.careerAnalysis);
+      const derivedScore = normCareerAnalysis.atsScore?.score || 0;
+      const derivedSkills = normResumeData.skills || [];
 
       clearTimers();
       setJobs(rawJobs);
       setInternships(rawInternships);
-      setResumeData(apiData.resumeData || {});
-      setCareerAnalysis(apiData.careerAnalysis || {});
+      setResumeData(normResumeData);
+      setCareerAnalysis(normCareerAnalysis);
       setAtsScore(derivedScore);
       setParsedSkills(derivedSkills);
       setMatcherPhase("results");
 
-      await cacheResumeResults(rawJobs, derivedScore, derivedSkills, rawInternships, apiData.resumeData || {}, apiData.careerAnalysis || {});
+      await cacheResumeResults(rawJobs, derivedScore, derivedSkills, rawInternships, normResumeData, normCareerAnalysis);
+
+      if (!isMockMode) {
+        try {
+          // 1. Insert a resume session first
+          const sessionPayload = {
+            user_id: user.id,
+            resume_name: file.name,
+            status: "generated"
+          };
+          const { data: sessionData, error: sessionErr } = await supabase
+            .from("resume_sessions")
+            .insert(sessionPayload)
+            .select("id")
+            .single();
+
+          if (sessionErr) {
+            console.error("Failed to insert resume session:", sessionErr);
+          } else if (sessionData) {
+            // 2. Insert into ai_analysis
+            const analysisPayload = {
+              session_id: sessionData.id,
+              user_id: user.id,
+              resume_review: normCareerAnalysis.resumeReview ? { content: normCareerAnalysis.resumeReview } : null,
+              ats_score: normCareerAnalysis.atsScore ? { score: normCareerAnalysis.atsScore.score, feedback: normCareerAnalysis.atsScore.feedback } : null,
+              skill_gap_analysis: normCareerAnalysis.skillGapAnalysis ? { content: normCareerAnalysis.skillGapAnalysis } : null,
+              interview_practice: normCareerAnalysis.interviewPractice ? { content: normCareerAnalysis.interviewPractice } : null,
+              career_roadmap: normCareerAnalysis.careerRoadmap ? { content: normCareerAnalysis.careerRoadmap } : null,
+              salary_insights: normCareerAnalysis.salaryInsights ? { content: normCareerAnalysis.salaryInsights } : null,
+              linkedin_optimization: normCareerAnalysis.linkedinOptimization ? { content: normCareerAnalysis.linkedinOptimization } : null,
+              cover_letter_generator: normCareerAnalysis.coverLetter ? { content: normCareerAnalysis.coverLetter } : null
+            };
+
+            const { error: analysisErr } = await supabase
+              .from("ai_analysis")
+              .insert(analysisPayload);
+
+            if (analysisErr) {
+              console.error("Failed to insert ai_analysis:", analysisErr);
+            } else {
+              console.log("Successfully stored AI analysis in database!");
+            }
+          }
+        } catch (dbErr) {
+          console.error("Database persistence error:", dbErr);
+        }
+      }
 
       await updateProfile({
         skills: derivedSkills.join(", "),
@@ -936,23 +1167,53 @@ function Dashboard() {
         }
       }
       else if (actionType === "Resume Review" || promptText.toLowerCase().includes("resume review") || promptText.toLowerCase().includes("improve my resume")) {
-        aiResponseText = `### Resume Review Report 📝\n\n${resumeName ? `I have thoroughly reviewed your uploaded resume **${resumeName}** against current tech hiring standards.` : `I reviewed your profile background. For a comprehensive audit, please upload your resume file (.pdf) under the **Job Matcher** tab.`}\n\n**Here are my critical suggestions to increase resume callbacks:**\n\n1. **Add Measurable Achievements**: Instead of *"Built APIs using FastAPI"*, use *"Designed and deployed 15+ asynchronous FastAPI endpoints, reducing response latency by 32%."*\n2. **Incorporate Certifications**: Highlight professional validations like AWS Certified Practitioner or React Specialist to stand out.\n3. **Strengthen Project Descriptions**: Frame descriptions using the **STAR method** (Situation, Task, Action, Result) with clear impact stats.\n4. **Prune Unused Tools**: Focus on key tech stacks related to your target roles to make your profile highly scannable by human recruiters.`;
+        const reviewText = careerAnalysis?.resumeReview;
+        if (reviewText && reviewText.trim().length > 0) {
+          aiResponseText = `### Resume Review Report 📝\n\nBased on your parsed resume **${resumeName || "uploaded resume"}**, here is your personalized AI audit:\n\n${reviewText}`;
+        } else {
+          aiResponseText = `### Resume Review Report 📝\n\n${resumeName ? `I have thoroughly reviewed your uploaded resume **${resumeName}** against current tech hiring standards.` : `I reviewed your profile background. For a comprehensive audit, please upload your resume file (.pdf) under the **Job Matcher** tab.`}\n\n**Here are my critical suggestions to increase resume callbacks:**\n\n1. **Add Measurable Achievements**: Instead of *"Built APIs using FastAPI"*, use *"Designed and deployed 15+ asynchronous FastAPI endpoints, reducing response latency by 32%."*\n2. **Incorporate Certifications**: Highlight professional validations like AWS Certified Practitioner or React Specialist to stand out.\n3. **Strengthen Project Descriptions**: Frame descriptions using the **STAR method** (Situation, Task, Action, Result) with clear impact stats.\n4. **Prune Unused Tools**: Focus on key tech stacks related to your target roles to make your profile highly scannable by human recruiters.`;
+        }
       }
       else if (actionType === "ATS Score Check" || promptText.toLowerCase().includes("ats score") || promptText.toLowerCase().includes("improve my ats")) {
-        const score = profile?.ats_score || 78;
-        aiResponseText = `### ATS Suitability Audit 🎯\n\nYour current estimated ATS (Applicant Tracking System) scan score is **${score}%**.\n\n**Key Optimization Recommendations to reach 95%+:**\n\n* **Keyword Density**: Ensure keywords matching your target role (e.g., Docker, FastAPI, Vector Databases) appear 3-4 times in natural contexts.\n* **Format Scanning**: Avoid complex multi-column grids, graphical tables, icons, and text boxes which confuse modern ATS scanners.\n* **Standardized Headers**: Use standard sections like "Professional Experience", "Technical Skills", and "Education" rather than generic headers.\n* **File Format**: Use standard text-based PDFs instead of rasterized images to guarantee complete keyword indexability.`;
+        const score = atsScore || profile?.ats_score || 78;
+        const feedbackText = careerAnalysis?.atsScore?.feedback;
+        if (feedbackText && feedbackText.trim().length > 0) {
+          aiResponseText = `### ATS Suitability Audit 🎯\n\nYour current estimated ATS (Applicant Tracking System) scan score is **${score}%**.\n\n**Custom Optimization Recommendations to reach 95%+:**\n\n${feedbackText}`;
+        } else {
+          aiResponseText = `### ATS Suitability Audit 🎯\n\nYour current estimated ATS (Applicant Tracking System) scan score is **${score}%**.\n\n**Key Optimization Recommendations to reach 95%+:**\n\n* **Keyword Density**: Ensure keywords matching your target role (e.g., Docker, FastAPI, Vector Databases) appear 3-4 times in natural contexts.\n* **Format Scanning**: Avoid complex multi-column grids, graphical tables, icons, and text boxes which confuse modern ATS scanners.\n* **Standardized Headers**: Use standard sections like "Professional Experience", "Technical Skills", and "Education" rather than generic headers.\n* **File Format**: Use standard text-based PDFs instead of rasterized images to guarantee complete keyword indexability.`;
+        }
       }
       else if (actionType === "Skill Gap Analysis" || promptText.toLowerCase().includes("skill gap") || promptText.toLowerCase().includes("what skills")) {
-        aiResponseText = `### Skill Gap Analysis 📊\n\nBased on your listed skills (**${userSkills}**) and mapping against industry trends for top AI/Software engineering hiring pipelines:\n\n**Your Current Core Skills:**\n${userSkills.split(",").map(s => `* ✓ ${s.trim()}`).join("\n")}\n\n**Recommended Target Skills to acquire next:**\n\n1. **Docker & Kubernetes**: Essential for containerizing applications and running microservices.\n2. **AWS Deployment**: Industry standard cloud computing and serverless execution models.\n3. **LangChain & LlamaIndex**: Critical frameworks for creating Generative AI agents and RAG search pipelines.\n4. **Vector Databases (Pinecone, pgvector)**: The foundational indexing systems behind modern LLM search.\n\n*Learning Recommendation: Try building a RAG application using FastAPI, LangChain, and pgvector to master 3 of these skills in one project!*`;
+        const gapText = careerAnalysis?.skillGapAnalysis;
+        if (gapText && gapText.trim().length > 0) {
+          aiResponseText = `### Skill Gap Analysis 📊\n\nBased on your active skillset, here is your personalized AI gap assessment:\n\n${gapText}`;
+        } else {
+          aiResponseText = `### Skill Gap Analysis 📊\n\nBased on your listed skills (**${userSkills}**) and mapping against industry trends for top AI/Software engineering hiring pipelines:\n\n**Your Current Core Skills:**\n${userSkills.split(",").map(s => `* ✓ ${s.trim()}`).join("\n")}\n\n**Recommended Target Skills to acquire next:**\n\n1. **Docker & Kubernetes**: Essential for containerizing applications and running microservices.\n2. **AWS Deployment**: Industry standard cloud computing and serverless execution models.\n3. **LangChain & LlamaIndex**: Critical frameworks for creating Generative AI agents and RAG search pipelines.\n4. **Vector Databases (Pinecone, pgvector)**: The foundational indexing systems behind modern LLM search.\n\n*Learning Recommendation: Try building a RAG application using FastAPI, LangChain, and pgvector to master 3 of these skills in one project!*`;
+        }
       }
       else if (actionType === "Salary Insights" || promptText.toLowerCase().includes("salary") || promptText.toLowerCase().includes("how much do")) {
-        aiResponseText = `### Salary Insights Framework 💵\n\nHere are the average annual salary ranges for high-demand technology roles in top tech hubs:\n\n* **AI Engineer**: \n  * Entry: $115,000 - $140,000\n  * Mid-Level: $150,000 - $185,000\n  * Senior: $190,000 - $240,000+\n* **Machine Learning Engineer**: \n  * Entry: $110,000 - $135,000\n  * Mid: $145,000 - $180,000\n  * Senior: $190,000 - $230,000\n* **Full-Stack Developer**: \n  * Entry: $85,000 - $110,000\n  * Mid: $120,000 - $155,000\n  * Senior: $165,000 - $200,000\n\n*Note: Total compensation figures frequently include significant stock options, equity sign-ons, and performance bonuses.*`;
+        const salaryText = careerAnalysis?.salaryInsights;
+        if (salaryText && salaryText.trim().length > 0) {
+          aiResponseText = `### Salary Insights Framework 💵\n\nBased on your parsed profile and target roles, here are your custom salary predictions:\n\n${salaryText}`;
+        } else {
+          aiResponseText = `### Salary Insights Framework 💵\n\nHere are the average annual salary ranges for high-demand technology roles in top tech hubs:\n\n* **AI Engineer**: \n  * Entry: $115,000 - $140,000\n  * Mid-Level: $150,000 - $185,000\n  * Senior: $190,000 - $240,000+\n* **Machine Learning Engineer**: \n  * Entry: $110,000 - $135,000\n  * Mid: $145,000 - $180,000\n  * Senior: $190,000 - $230,000\n* **Full-Stack Developer**: \n  * Entry: $85,000 - $110,000\n  * Mid: $120,000 - $155,000\n  * Senior: $165,000 - $200,000\n\n*Note: Total compensation figures frequently include significant stock options, equity sign-ons, and performance bonuses.*`;
+        }
       }
       else if (actionType === "LinkedIn Optimization" || promptText.toLowerCase().includes("linkedin")) {
-        aiResponseText = `### LinkedIn Profile Optimization Guide 🌐\n\nTurn your LinkedIn profile into a recruiter magnet with these strategic enhancements:\n\n* **Headline Formula**: Instead of *"Student at College"*, use *"AI Engineer in training | Python, React, FastAPI | Building Generative AI Solutions"* to maximize search algorithm indexing.\n* **About Summary**: Craft a 3-paragraph summary stating (1) your passion and focus, (2) your primary technical toolkit, and (3) your active research/projects. End with a call to action: *"Open to software and AI engineering opportunities | Contact: ${user?.email || "email"}"*\n* **Featured Section**: Attach your custom AI Job Matcher landing page, resume PDF, and GitHub repository links directly to top visibility.\n* **Skills Section**: List exactly 50 technical skills, ensuring your top 3 are high-volume keywords related to your target jobs.`;
+        const linkedinText = careerAnalysis?.linkedinOptimization;
+        if (linkedinText && linkedinText.trim().length > 0) {
+          aiResponseText = `### LinkedIn Profile Optimization Guide 🌐\n\nTurn your LinkedIn profile into a recruiter magnet with your personalized suggestions:\n\n${linkedinText}`;
+        } else {
+          aiResponseText = `### LinkedIn Profile Optimization Guide 🌐\n\nTurn your LinkedIn profile into a recruiter magnet with these strategic enhancements:\n\n* **Headline Formula**: Instead of *"Student at College"*, use *"AI Engineer in training | Python, React, FastAPI | Building Generative AI Solutions"* to maximize search algorithm indexing.\n* **About Summary**: Craft a 3-paragraph summary stating (1) your passion and focus, (2) your primary technical toolkit, and (3) your active research/projects. End with a call to action: *"Open to software and AI engineering opportunities | Contact: ${user?.email || "email"}"*\n* **Featured Section**: Attach your custom AI Job Matcher landing page, resume PDF, and GitHub repository links directly to top visibility.\n* **Skills Section**: List exactly 50 technical skills, ensuring your top 3 are high-volume keywords related to your target jobs.`;
+        }
       }
       else if (actionType === "Cover Letter Generator" || promptText.toLowerCase().includes("cover letter")) {
-        aiResponseText = `### Custom Cover Letter Generator ✉️\n\nHere is a highly professional, impact-driven cover letter template mapped to your skills:\n\n***\n\n**Subject: Application for Software / AI Engineer Role**\n\nDear Hiring Team,\n\nI am writing to express my strong interest in the Software / AI Engineer position. With a robust technical foundation in **${userSkills}**, alongside hands-on experience building scalable applications, I am eager to contribute to your engineering team.\n\nIn my recent work, I built and integrated asynchronous microservices, focused on maximizing response efficiency. Specifically, I leverage systems like FastAPI and Generative AI, matching features to precise client specifications. This experience has taught me how to bridge complex algorithmic modeling with streamlined, user-first frontends.\n\nI am excited by your organization's commitment to pushing tech boundaries, and I would love the chance to discuss how my skill set aligns with your current team goals. Thank you for your time and consideration.\n\nSincerely,\n\n**${name}** \n${user?.email || "rahul@example.com"}  \n\n***`;
+        const letterText = careerAnalysis?.coverLetter;
+        if (letterText && letterText.trim().length > 0) {
+          aiResponseText = `### Custom Cover Letter Generator ✉️\n\nHere is your custom tailored cover letter template mapped to your skills:\n\n***\n\n${letterText}\n\n***`;
+        } else {
+          aiResponseText = `### Custom Cover Letter Generator ✉️\n\nHere is a highly professional, impact-driven cover letter template mapped to your skills:\n\n***\n\n**Subject: Application for Software / AI Engineer Role**\n\nDear Hiring Team,\n\nI am writing to express my strong interest in the Software / AI Engineer position. With a robust technical foundation in **${userSkills}**, alongside hands-on experience building scalable applications, I am eager to contribute to your engineering team.\n\nIn my recent work, I built and integrated asynchronous microservices, focused on maximizing response efficiency. Specifically, I leverage systems like FastAPI and Generative AI, matching features to precise client specifications. This experience has taught me how to bridge complex algorithmic modeling with streamlined, user-first frontends.\n\nI am excited by your organization's commitment to pushing tech boundaries, and I would love the chance to discuss how my skill set aligns with your current team goals. Thank you for your time and consideration.\n\nSincerely,\n\n**${name}** \n${user?.email || "rahul@example.com"}  \n\n***`;
+        }
       }
       else if (actionType === "Improve my profile strength" || promptText.toLowerCase().includes("improve my profile strength")) {
         aiResponseText = `### AI Profile Strength Diagnostics 📈\n\nYour current Profile Strength is ranked at **85%** (Very Good).\n\n**To reach 100% and rank at the top of recruiter searches, perform these actions:**\n\n1. **Add Certifications**: Acquire validations such as *AWS Certified Cloud Practitioner* or *DeepLearning.AI TensorFlow Developer*.\n2. **Incorporate Capstone Projects**: Build a full-stack RAG pipeline with FastAPI and deploy it to a live environment (e.g. Hugging Face, Vercel).\n3. **Complete LinkedIn Summary**: Audit your About summary to include keywords optimized specifically for high-callback search hits.\n\n*Would you like me to guide you through building a capstone RAG project or drafting your LinkedIn summary? Just ask!*`;
@@ -1993,7 +2254,7 @@ function Dashboard() {
                           </div>
                         </div>
 
-                        {resumeData?.roles && resumeData.roles.length > 0 && (
+                        {resumeData?.roles && Array.isArray(resumeData.roles) && resumeData.roles.length > 0 && (
                           <div className="space-y-2 pt-2 border-t border-border/40">
                             <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
                               Target Roles
@@ -2023,13 +2284,17 @@ function Dashboard() {
                           </div>
                         )}
 
-                        {(resumeData?.keywords || careerAnalysis?.keywords) && (
+                        {((resumeData?.keywords && Array.isArray(resumeData.keywords) && resumeData.keywords.length > 0) ||
+                          (careerAnalysis?.keywords && Array.isArray(careerAnalysis.keywords) && careerAnalysis.keywords.length > 0)) && (
                           <div className="space-y-2 pt-2 border-t border-border/40">
                             <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
                               Important Keywords Added
                             </h3>
                             <div className="flex flex-wrap gap-1.5">
-                              {(resumeData.keywords || careerAnalysis.keywords || []).map((keyword: string, idx: number) => (
+                              {[
+                                ...(Array.isArray(resumeData?.keywords) ? resumeData.keywords : []),
+                                ...(Array.isArray(careerAnalysis?.keywords) ? careerAnalysis.keywords : [])
+                              ].map((keyword: string, idx: number) => (
                                 <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5 bg-muted/65 text-foreground/80 font-medium">
                                   {keyword}
                                 </Badge>

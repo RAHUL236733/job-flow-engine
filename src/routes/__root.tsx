@@ -38,13 +38,22 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
+      <div className="max-w-lg w-full text-center space-y-4">
         <h1 className="text-xl font-semibold tracking-tight text-foreground">
           This page didn't load
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Something went wrong on our end. You can try refreshing or head back home.
         </p>
+        {error && (
+          <div className="text-left bg-destructive/5 border border-destructive/15 rounded-xl p-4 space-y-2">
+            <p className="text-xs font-bold text-destructive">Error Details:</p>
+            <p className="text-xs font-mono text-foreground bg-background/50 p-2.5 rounded-lg break-all select-all leading-normal max-h-48 overflow-y-auto">
+              {error.message || String(error)}
+              {error.stack && `\n\n${error.stack}`}
+            </p>
+          </div>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {
