@@ -71,6 +71,7 @@ type Job = {
   type?: string;
   experience?: string;
   saved_at?: string;
+  matchReasons?: string[];
 };
 
 type ActiveTab = "dashboard" | "matcher" | "assistant" | "saved" | "applications" | "profile";
@@ -83,6 +84,16 @@ type Application = {
   status: AppStatus;
   applied_at: string;
   location?: string;
+};
+
+type UserStats = {
+  user_id: string;
+  jobs_matched: number;
+  applications_sent: number;
+  saved_jobs: number;
+  profile_score: number;
+  ats_match_rank: number;
+  resume_uploaded: boolean;
 };
 
 type ChatMessage = {
@@ -162,10 +173,7 @@ function Dashboard() {
   // --- APPLICATIONS TRACKER STATE ---
   const [applications, setApplications] = useState<Application[]>(() => {
     const saved = localStorage.getItem("user_applications");
-    return saved ? JSON.parse(saved) : [
-      { id: "app-1", company: "Google DeepMind", role: "AI Software Engineer", status: "Interviewing", applied_at: new Date().toLocaleDateString(), location: "Remote" },
-      { id: "app-2", company: "Vercel", role: "Frontend Developer", status: "Applied", applied_at: new Date().toLocaleDateString(), location: "San Francisco" }
-    ];
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [showAddAppModal, setShowAddAppModal] = useState(false);
@@ -211,6 +219,10 @@ function Dashboard() {
   const [dragOver, setDragOver] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [internships, setInternships] = useState<Job[]>([]);
+  const [resumeData, setResumeData] = useState<any>({});
+  const [careerAnalysis, setCareerAnalysis] = useState<any>({});
+  const [resultsSubTab, setResultsSubTab] = useState<"jobs" | "resume" | "career" | "tools">("jobs");
   const [atsScore, setAtsScore] = useState<number>(0);
   const [parsedSkills, setParsedSkills] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -219,6 +231,118 @@ function Dashboard() {
   const [savedJobs, setSavedJobs] = useState<Job[]>([]);
   const [savedJobsLoading, setSavedJobsLoading] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+
+  // --- USER STATISTICS STATE ---
+  const [userStats, setUserStats] = useState<UserStats | null>(null);
+  const [userStatsLoading, setUserStatsLoading] = useState(false);
+  const initialLoadsRef = useRef({ userStatsFetched: false });
+
+  const fetchUserStats = useCallback(async (force = false) => {
+    if (!user) return;
+    if (initialLoadsRef.current.userStatsFetched && !force) return;
+
+    setUserStatsLoading(true);
+
+    if (isMockMode) {
+      const cached = localStorage.getItem(`mock_user_stats_${user.id}`);
+      if (cached) {
+        setUserStats(JSON.parse(cached));
+      } else {
+        const defaultStats: UserStats = {
+          user_id: user.id,
+          jobs_matched: 0,
+          applications_sent: 0,
+          saved_jobs: 0,
+          profile_score: 0,
+          ats_match_rank: 0,
+          resume_uploaded: false,
+        };
+        setUserStats(defaultStats);
+        localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(defaultStats));
+      }
+      setUserStatsLoading(false);
+      initialLoadsRef.current.userStatsFetched = true;
+      return;
+    }
+
+    try {
+      let { data, error } = await supabase
+        .from("user_stats")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
+        const defaultStats = {
+          user_id: user.id,
+          jobs_matched: 0,
+          applications_sent: 0,
+          saved_jobs: 0,
+          profile_score: 0,
+          ats_match_rank: 0,
+          resume_uploaded: false,
+        };
+        const { data: inserted, error: insertError } = await supabase
+          .from("user_stats")
+          .insert(defaultStats)
+          .select("*")
+          .single();
+
+        if (insertError) {
+          console.error("Failed to auto-insert user stats row:", insertError);
+          data = defaultStats;
+        } else {
+          data = inserted;
+        }
+      }
+
+      setUserStats(data as UserStats);
+      initialLoadsRef.current.userStatsFetched = true;
+    } catch (err) {
+      console.error("Failed to fetch user stats:", err);
+    } finally {
+      setUserStatsLoading(false);
+    }
+  }, [user, isMockMode]);
+
+  const syncProfileScore = useCallback(async () => {
+    if (!user) return;
+
+    const hasName = !!(profile?.full_name?.trim());
+    const hasEmail = !!(user?.email?.trim());
+    const hasSkills = !!(profile?.skills?.trim() || parsedSkills.length > 0);
+
+    setUserStats(prev => {
+      if (!prev) return prev;
+      const hasResume = !!(prev.resume_uploaded || profile?.resume_name || profile?.resume_url);
+
+      let calculatedScore = 0;
+      if (hasName) calculatedScore += 20;
+      if (hasEmail) calculatedScore += 20;
+      if (hasResume) calculatedScore += 30;
+      if (hasSkills) calculatedScore += 30;
+
+      if (calculatedScore !== prev.profile_score) {
+        const updatedStats = { ...prev, profile_score: calculatedScore };
+
+        if (isMockMode) {
+          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+        } else {
+          supabase
+            .from("user_stats")
+            .update({ profile_score: calculatedScore })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to sync profile score:", error);
+            });
+        }
+        return updatedStats;
+      }
+      return prev;
+    });
+  }, [user, profile, parsedSkills, isMockMode]);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach(clearTimeout);
@@ -230,6 +354,35 @@ function Dashboard() {
   // --- DATABASE HELPERS ---
   const loadCachedResumeResults = useCallback(async () => {
     if (!user) return;
+
+    // Load comprehensive data from localStorage first
+    const extendedCached = localStorage.getItem(`ai_job_matcher_extended_results_${user.id}`);
+    if (extendedCached) {
+      try {
+        const parsed = JSON.parse(extendedCached);
+        setJobs(parsed.jobs || []);
+        setInternships(parsed.internships || []);
+        setResumeData(parsed.resumeData || {});
+        setCareerAnalysis(parsed.careerAnalysis || {});
+        setAtsScore(parsed.atsScore || 0);
+        setParsedSkills(parsed.skills || []);
+        setMatcherPhase("results");
+
+        setUserStats(prev => {
+          if (!prev) return prev;
+          const updatedStats = {
+            ...prev,
+            resume_uploaded: true,
+            ats_match_rank: parsed.atsScore || 0,
+            jobs_matched: (parsed.jobs || []).length,
+          };
+          return updatedStats;
+        });
+        return;
+      } catch (err) {
+        console.error("Extended cache parsing error:", err);
+      }
+    }
 
     if (profile?.skills) {
       setParsedSkills(
@@ -246,10 +399,25 @@ function Dashboard() {
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
-          setJobs(parsed.jobs);
-          setAtsScore(parsed.atsScore);
-          setParsedSkills(parsed.skills);
+          setJobs(parsed.jobs || []);
+          setInternships(parsed.internships || []);
+          setResumeData(parsed.resumeData || {});
+          setCareerAnalysis(parsed.careerAnalysis || {});
+          setAtsScore(parsed.atsScore || 75);
+          setParsedSkills(parsed.skills || []);
           setMatcherPhase("results");
+
+          setUserStats(prev => {
+            if (!prev) return prev;
+            const updatedStats = {
+              ...prev,
+              resume_uploaded: true,
+              ats_match_rank: parsed.atsScore || 75,
+              jobs_matched: (parsed.jobs || []).length,
+            };
+            localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+            return updatedStats;
+          });
         } catch (err) {
           console.error("Cache parsing error", err);
         }
@@ -266,8 +434,31 @@ function Dashboard() {
         .single();
 
       if (data && new Date(data.expires_at) > new Date()) {
-        setJobs(data.jobs as Job[]);
+        const cachedJobs = data.jobs as Job[];
+        setJobs(cachedJobs);
         setMatcherPhase("results");
+
+        setUserStats(prev => {
+          if (!prev) return prev;
+          const updatedStats = {
+            ...prev,
+            resume_uploaded: true,
+            ats_match_rank: profile?.ats_score || 75,
+            jobs_matched: cachedJobs.length,
+          };
+          supabase
+            .from("user_stats")
+            .update({
+              resume_uploaded: true,
+              ats_match_rank: profile?.ats_score || 75,
+              jobs_matched: cachedJobs.length,
+            })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to sync resume cached stats:", error);
+            });
+          return updatedStats;
+        });
       }
     } catch (err) {
       console.error("No active cache found", err);
@@ -275,14 +466,30 @@ function Dashboard() {
   }, [user, profile, isMockMode]);
 
   const cacheResumeResults = useCallback(
-    async (jobsList: Job[], score: number, skillsList: string[]) => {
+    async (
+      jobsList: Job[],
+      score: number,
+      skillsList: string[],
+      internshipsList?: Job[],
+      rData?: any,
+      cAnalysis?: any
+    ) => {
       if (!user) return;
 
+      const payload = {
+        jobs: jobsList,
+        atsScore: score,
+        skills: skillsList,
+        internships: internshipsList || [],
+        resumeData: rData || {},
+        careerAnalysis: cAnalysis || {}
+      };
+
+      // Store in localStorage for comprehensive retrieval on reload
+      localStorage.setItem(`ai_job_matcher_extended_results_${user.id}`, JSON.stringify(payload));
+
       if (isMockMode) {
-        localStorage.setItem(
-          `mock_resume_results_${user.id}`,
-          JSON.stringify({ jobs: jobsList, atsScore: score, skills: skillsList }),
-        );
+        localStorage.setItem(`mock_resume_results_${user.id}`, JSON.stringify(payload));
         return;
       }
 
@@ -312,8 +519,18 @@ function Dashboard() {
 
     if (isMockMode) {
       const mockSaved = localStorage.getItem(`mock_saved_jobs_${user.id}`);
-      setSavedJobs(mockSaved ? JSON.parse(mockSaved) : []);
+      const parsed = mockSaved ? JSON.parse(mockSaved) : [];
+      setSavedJobs(parsed);
       setSavedJobsLoading(false);
+
+      setUserStats(prev => {
+        if (prev && prev.saved_jobs !== parsed.length) {
+          const updatedStats = { ...prev, saved_jobs: parsed.length };
+          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+          return updatedStats;
+        }
+        return prev;
+      });
       return;
     }
 
@@ -325,7 +542,23 @@ function Dashboard() {
         .order("saved_at", { ascending: false });
 
       if (error) throw error;
-      setSavedJobs((data as Job[]) || []);
+      const parsed = (data as Job[]) || [];
+      setSavedJobs(parsed);
+
+      setUserStats(prev => {
+        if (prev && prev.saved_jobs !== parsed.length) {
+          const updated = { ...prev, saved_jobs: parsed.length };
+          supabase
+            .from("user_stats")
+            .update({ saved_jobs: parsed.length })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to sync saved jobs count:", error);
+            });
+          return updated;
+        }
+        return prev;
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Failed to fetch bookmarked jobs", { description: msg });
@@ -354,6 +587,14 @@ function Dashboard() {
         }
         setSavedJobs(updated);
         localStorage.setItem(`mock_saved_jobs_${user.id}`, JSON.stringify(updated));
+
+        setUserStats(prev => {
+          if (!prev) return prev;
+          const newSavedCount = Math.max(0, prev.saved_jobs + (isSaved ? -1 : 1));
+          const updatedStats = { ...prev, saved_jobs: newSavedCount };
+          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+          return updatedStats;
+        });
         return;
       }
 
@@ -383,6 +624,20 @@ function Dashboard() {
           setSavedJobs([...savedJobs, job]);
           toast.success("Job bookmarked successfully!");
         }
+
+        setUserStats(prev => {
+          if (!prev) return prev;
+          const newSavedCount = Math.max(0, prev.saved_jobs + (isSaved ? -1 : 1));
+          const updated = { ...prev, saved_jobs: newSavedCount };
+          supabase
+            .from("user_stats")
+            .update({ saved_jobs: newSavedCount })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to sync saved job toggle stats:", error);
+            });
+          return updated;
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         toast.error("Bookmark toggle failed", { description: msg });
@@ -412,7 +667,7 @@ function Dashboard() {
   };
 
   const handleResumeSubmit = async () => {
-    if (!file) return;
+    if (!file || !user) return;
 
     if (trialsUsed >= 3) {
       toast.error("Free trial limit reached", {
@@ -434,87 +689,88 @@ function Dashboard() {
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const data = await res.json();
 
-      let parsedData = data;
+      // Debugging logs requested in requirement 9
+      console.log("Raw API Response:", data);
+      const apiData = Array.isArray(data) ? data[0] : data;
+      console.log("Normalized Data:", apiData);
 
-      if (Array.isArray(data) && data.length > 0) {
-        const firstItem = data[0];
-        if (firstItem && typeof firstItem === "object") {
-          if ("json" in firstItem) {
-            parsedData = firstItem.json;
-          } else if ("body" in firstItem) {
-            parsedData = firstItem.body;
-          } else if (!("title" in firstItem) && !("company" in firstItem)) {
-            parsedData = firstItem;
-          }
-        }
-      } else if (data && typeof data === "object" && "json" in data) {
-        parsedData = data.json;
-      }
+      let rawJobs: Job[] = apiData.topJobs || apiData.jobs || [];
+      let rawInternships: Job[] = apiData.internships || [];
 
-      let rawJobs: Job[] = [];
-      if (Array.isArray(parsedData)) {
-        rawJobs = parsedData;
-      } else if (parsedData && typeof parsedData === "object") {
-        rawJobs = parsedData.topJobs ?? parsedData.jobs ?? parsedData.data ?? [];
-      }
-
+      // Map rawJobs to standard structure
       if (Array.isArray(rawJobs)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rawJobs = rawJobs.map((item: any) => {
+          let actualItem = item;
           if (item && typeof item === "object") {
-            if ("json" in item) return item.json;
-            if ("body" in item) return item.body;
+            if ("json" in item) actualItem = item.json;
+            else if ("body" in item) actualItem = item.body;
           }
-          return item;
+          const reasons = Array.isArray(actualItem.matchReasons) ? actualItem.matchReasons : [];
+          return {
+            title: actualItem.title || "",
+            company: actualItem.company || "",
+            location: actualItem.location || "",
+            skills: actualItem.skills || "",
+            url: actualItem.applyLink || actualItem.url || "#",
+            score: actualItem.matchScore !== undefined
+              ? String(actualItem.matchScore)
+              : (actualItem.score !== undefined ? String(actualItem.score) : "75"),
+            description: actualItem.description || "",
+            matchReasons: reasons
+          };
         });
       } else {
         rawJobs = [];
       }
 
-      let derivedSkills: string[] = [];
-      if (parsedData && typeof parsedData === "object") {
-        const skillsVal = parsedData.extractedSkills ?? parsedData.skills;
-        if (Array.isArray(skillsVal)) {
-          derivedSkills = skillsVal.map(String);
-        } else if (typeof skillsVal === "string") {
-          derivedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
-        }
-      }
-      if (derivedSkills.length === 0) {
-        derivedSkills = Array.from(
-          new Set(
-            rawJobs.flatMap((j) => (j.skills ? j.skills.split(",").map((s) => s.trim()) : [])),
-          ),
-        ).slice(0, 10);
+      // Map rawInternships to standard structure
+      if (Array.isArray(rawInternships)) {
+        rawInternships = rawInternships.map((item: any) => {
+          let actualItem = item;
+          if (item && typeof item === "object") {
+            if ("json" in item) actualItem = item.json;
+            else if ("body" in item) actualItem = item.body;
+          }
+          const reasons = Array.isArray(actualItem.matchReasons) ? actualItem.matchReasons : [];
+          return {
+            title: actualItem.title || "",
+            company: actualItem.company || "",
+            location: actualItem.location || "",
+            skills: actualItem.skills || "",
+            url: actualItem.applyLink || actualItem.url || "#",
+            score: actualItem.matchScore !== undefined
+              ? String(actualItem.matchScore)
+              : (actualItem.score !== undefined ? String(actualItem.score) : "75"),
+            description: actualItem.description || "",
+            matchReasons: reasons
+          };
+        });
+      } else {
+        rawInternships = [];
       }
 
-      let derivedScore = 75;
-      if (parsedData && typeof parsedData === "object") {
-        const scoreVal = parsedData.atsScore ?? parsedData.score ?? parsedData.ats_score;
-        if (scoreVal !== undefined && scoreVal !== null) {
-          const num = parseFloat(String(scoreVal).replace(/%/g, ""));
-          if (!isNaN(num)) {
-            derivedScore = Math.round(num);
-          }
-        }
-      }
-      if (derivedScore === 75 && rawJobs.length > 0) {
-        const avg = rawJobs.reduce((acc, j) => {
-          const s = parseFloat(String(j.score).replace(/%/g, "") || "0");
-          return acc + (isNaN(s) ? 0 : s);
-        }, 0) / rawJobs.length;
-        if (avg > 0) {
-          derivedScore = Math.round(avg);
-        }
+      // ATS Score: careerAnalysis?.atsScore?.score || 0
+      const derivedScore = apiData.careerAnalysis?.atsScore?.score || 0;
+
+      // Skills: resumeData?.skills || []
+      let derivedSkills: string[] = [];
+      const skillsVal = apiData.resumeData?.skills || [];
+      if (Array.isArray(skillsVal)) {
+        derivedSkills = skillsVal.map(String);
+      } else if (typeof skillsVal === "string") {
+        derivedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
       }
 
       clearTimers();
-      setJobs(rawJobs.slice(0, 8));
+      setJobs(rawJobs);
+      setInternships(rawInternships);
+      setResumeData(apiData.resumeData || {});
+      setCareerAnalysis(apiData.careerAnalysis || {});
       setAtsScore(derivedScore);
       setParsedSkills(derivedSkills);
       setMatcherPhase("results");
 
-      await cacheResumeResults(rawJobs.slice(0, 8), derivedScore, derivedSkills);
+      await cacheResumeResults(rawJobs, derivedScore, derivedSkills, rawInternships, apiData.resumeData || {}, apiData.careerAnalysis || {});
 
       await updateProfile({
         skills: derivedSkills.join(", "),
@@ -523,6 +779,32 @@ function Dashboard() {
       });
 
       await incrementTrialsUsed();
+
+      setUserStats(prev => {
+        if (!prev) return prev;
+        const updatedStats = {
+          ...prev,
+          resume_uploaded: true,
+          ats_match_rank: derivedScore,
+          jobs_matched: rawJobs.length,
+        };
+        if (isMockMode) {
+          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+        } else {
+          supabase
+            .from("user_stats")
+            .update({
+              resume_uploaded: true,
+              ats_match_rank: derivedScore,
+              jobs_matched: rawJobs.length,
+            })
+            .eq("user_id", user.id)
+            .then(({ error }) => {
+              if (error) console.error("Failed to update scan statistics:", error);
+            });
+        }
+        return updatedStats;
+      });
     } catch (err) {
       console.error(err);
       clearTimers();
@@ -561,7 +843,9 @@ function Dashboard() {
       let interviewStrengths = undefined;
       let interviewImprovements = undefined;
 
-      const userSkills = profile?.skills || "Python, React, CSS, JavaScript, HTML, TypeScript";
+      const userSkills = (parsedSkills && parsedSkills.length > 0)
+        ? parsedSkills.join(", ")
+        : (profile?.skills || "Python, React, CSS, JavaScript, HTML, TypeScript");
       const resumeName = profile?.resume_name || "";
       const name = profile?.full_name || "Rahul";
 
@@ -755,6 +1039,46 @@ function Dashboard() {
     }
     toast.success("Session deleted!");
   };
+
+  const handleApplyClick = async (job: Job) => {
+    if (!user) return;
+
+    setUserStats(prev => {
+      if (!prev) return prev;
+      const newSentCount = prev.applications_sent + 1;
+      const updatedStats = { ...prev, applications_sent: newSentCount };
+
+      if (isMockMode) {
+        localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
+      } else {
+        supabase
+          .from("user_stats")
+          .update({ applications_sent: newSentCount })
+          .eq("user_id", user.id)
+          .then(({ error }) => {
+            if (error) console.error("Failed to increment applications sent:", error);
+          });
+      }
+      return updatedStats;
+    });
+
+    const alreadyTracked = applications.some(app => app.company.toLowerCase() === job.company.toLowerCase() && app.role.toLowerCase() === job.title.toLowerCase());
+    if (!alreadyTracked) {
+      addApplication(job.company, job.title, "Applied", job.location);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchUserStats();
+    }
+  }, [user, fetchUserStats]);
+
+  useEffect(() => {
+    if (user && userStats) {
+      syncProfileScore();
+    }
+  }, [user, !!userStats, profile, parsedSkills, syncProfileScore]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -1053,14 +1377,14 @@ function Dashboard() {
                   <div className="bg-white/80 dark:bg-slate-950/40 border border-slate-200/40 dark:border-slate-800/40 rounded-[20px] p-4 space-y-2.5 shadow-sm text-xs">
                     <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
                       <span>Resume Status</span>
-                      <span className={profile?.resume_name ? "font-bold text-emerald-600 dark:text-emerald-400" : "font-bold text-slate-400"}>
-                        {profile?.resume_name ? "Uploaded ✓" : "Not Uploaded ❌"}
+                      <span className={userStats?.resume_uploaded ? "font-bold text-emerald-600 dark:text-emerald-400" : "font-bold text-slate-400"}>
+                        {userStats?.resume_uploaded ? "Uploaded ✓" : "Not Uploaded ❌"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
                       <span>ATS Match Rank</span>
                       <span className="font-bold text-primary dark:text-blue-400">
-                        {profile?.ats_score ? `${profile.ats_score}%` : "71%"}
+                        {userStats?.ats_match_rank ? `${userStats.ats_match_rank}%` : "0%"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
@@ -1078,25 +1402,25 @@ function Dashboard() {
                 {[
                   {
                     title: "JOBS MATCHED",
-                    value: String(jobs.length || 8),
+                    value: String(userStats?.jobs_matched ?? 0),
                     icon: Sparkles,
                     color: "text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-100/50 dark:border-blue-900/20"
                   },
                   {
                     title: "APPLICATIONS SENT",
-                    value: String(applications.length),
+                    value: String(userStats?.applications_sent ?? 0),
                     icon: Briefcase,
                     color: "text-purple-600 bg-purple-50 dark:bg-purple-950/40 border-purple-100/50 dark:border-purple-900/20"
                   },
                   {
                     title: "SAVED JOBS",
-                    value: String(savedJobs.length || 2),
+                    value: String(userStats?.saved_jobs ?? 0),
                     icon: Bookmark,
                     color: "text-amber-600 bg-amber-50 dark:bg-amber-950/40 border-amber-100/50 dark:border-amber-900/20"
                   },
                   {
                     title: "PROFILE SCORE",
-                    value: profile?.ats_score ? `${profile.ats_score}%` : "80%",
+                    value: `${userStats?.profile_score ?? 0}%`,
                     icon: Award,
                     color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-100/50 dark:border-emerald-900/20"
                   }
@@ -1123,7 +1447,7 @@ function Dashboard() {
                   <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left flex flex-col justify-between h-full min-h-[300px]">
                     <div>
                       <h3 className="font-extrabold text-slate-850 dark:text-white text-base mb-6">Recent Scrape Matches</h3>
-                      
+
                       {jobs.length === 0 ? (
                         <div className="py-12 text-center text-xs text-slate-450 dark:text-slate-500 italic font-medium leading-relaxed max-w-sm mx-auto">
                           No matches found yet. Go to the "Job Matcher" to upload your resume!
@@ -1373,180 +1697,496 @@ function Dashboard() {
 
               {matcherPhase === "results" && (
                 <div className="space-y-8 animate-in fade-in-50 duration-500">
-                  <div className="grid gap-6 md:grid-cols-3">
-                    <Card className="p-6 flex flex-col items-center justify-center text-center shadow-md border-primary/10 bg-primary/5">
-                      <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                        ATS Score Match
-                      </h3>
-                      <div className="relative mt-4 flex items-center justify-center">
-                        <svg className="h-32 w-32 transform -rotate-90">
-                          <circle
-                            cx="64"
-                            cy="64"
-                            r="50"
-                            className="stroke-muted fill-none"
-                            strokeWidth="8"
-                          />
-                          <circle
-                            cx="64"
-                            cy="64"
-                            r="50"
-                            className="stroke-primary fill-none transition-all duration-1000 ease-out"
-                            strokeWidth="8"
-                            strokeDasharray={2 * Math.PI * 50}
-                            strokeDashoffset={2 * Math.PI * 50 * (1 - atsScore / 100)}
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                        <span className="absolute text-3xl font-extrabold text-foreground">
-                          {atsScore}%
-                        </span>
-                      </div>
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        {atsScore >= 80
-                          ? "Excellent ATS match score!"
-                          : "Good, but could be improved."}
-                      </p>
-                    </Card>
+                  {/* Results Tab Bar */}
+                  <div className="flex flex-wrap gap-2 border-b border-border pb-3 text-left">
+                    {[
+                      { id: "jobs", label: "Job & Internship Matches", icon: Briefcase },
+                      { id: "resume", label: "Resume Audit & Keywords", icon: FileText },
+                      { id: "career", label: "AI Career Strategy", icon: Sparkles },
+                      { id: "tools", label: "Prep & Generators", icon: Zap }
+                    ].map((tab) => {
+                      const Icon = tab.icon;
+                      const isActive = resultsSubTab === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => setResultsSubTab(tab.id as any)}
+                          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                            isActive
+                              ? "bg-primary text-primary-foreground shadow-sm scale-[1.02]"
+                              : "bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                    <Card className="p-6 md:col-span-2 shadow-md flex flex-col justify-between">
-                      <div className="space-y-3">
+                  {/* TAB 1 PANEL: JOBS & INTERNSHIPS */}
+                  {resultsSubTab === "jobs" && (
+                    <div className="space-y-8 animate-in fade-in-50 duration-300">
+                      {/* Top Jobs Matches Section */}
+                      <div className="space-y-4 text-left">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div>
+                            <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
+                              <Briefcase className="h-5 w-5 text-primary" />
+                              Top Job Matches ({jobs.length})
+                            </h2>
+                            <p className="text-xs text-muted-foreground">
+                              Matching roles found via AI scraper, ranked by skillset compatibility.
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            onClick={() => setMatcherPhase("upload")}
+                            className="rounded-xl shrink-0"
+                          >
+                            <RotateCcw className="mr-2 h-4 w-4" />
+                            Scrape Again
+                          </Button>
+                        </div>
+
+                        {jobs.length === 0 ? (
+                          <Card className="p-10 text-center text-muted-foreground shadow-sm border-dashed">
+                            No job matches found yet. Try uploading a different resume.
+                          </Card>
+                        ) : (
+                          <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                            {jobs.map((job, i) => {
+                              const isBookmarked = savedJobs.some((sj) => sj.url === job.url);
+                              return (
+                                <Card
+                                  key={i}
+                                  className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
+                                >
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <h3
+                                          onClick={() => setSelectedJob(job)}
+                                          className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
+                                        >
+                                          {job.title}
+                                        </h3>
+                                        <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
+                                          <Briefcase className="h-3 w-3 shrink-0" />
+                                          {job.company}
+                                        </p>
+                                      </div>
+                                      <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                                        {job.score}%
+                                      </span>
+                                    </div>
+
+                                    <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
+                                      <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                      {job.location || "Remote"}
+                                    </p>
+
+                                    {job.matchReasons && job.matchReasons.length > 0 && (
+                                      <div className="mt-3 pt-3 border-t border-border/40 space-y-1.5 text-left">
+                                        <h4 className="text-[10px] font-bold text-foreground/80 uppercase tracking-wider flex items-center gap-1">
+                                          <Sparkles className="h-3 w-3 text-primary shrink-0" />
+                                          Match Insights
+                                        </h4>
+                                        <ul className="space-y-1">
+                                          {job.matchReasons.slice(0, 2).map((reason, idx) => (
+                                            <li key={idx} className="text-[11px] text-muted-foreground leading-normal flex items-start gap-1.5">
+                                              <span className="text-primary shrink-0 mt-0.5">•</span>
+                                              <span className="line-clamp-2">{reason}</span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => toggleSaveJob(job)}
+                                      className="h-9 w-9 rounded-lg shrink-0"
+                                    >
+                                      {isBookmarked ? (
+                                        <BookmarkCheck className="h-4 w-4 text-primary fill-primary" />
+                                      ) : (
+                                        <Bookmark className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                    <a
+                                      href={job.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={() => handleApplyClick(job)}
+                                      className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
+                                    >
+                                      Apply Now
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  </div>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Top Internship Matches Section */}
+                      <div className="space-y-4 pt-6 border-t border-border/60 text-left animate-in fade-in-50 duration-300">
+                        <div>
+                          <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
+                            <FileSpreadsheet className="h-5 w-5 text-purple-500" />
+                            Top Internship Matches ({internships.length})
+                          </h2>
+                          <p className="text-xs text-muted-foreground">
+                            Live internship opportunities mapped to your skillset.
+                          </p>
+                        </div>
+
+                        {internships.length === 0 ? (
+                          <Card className="p-10 text-center text-muted-foreground shadow-sm border-dashed">
+                            No internship matches found in this scan.
+                          </Card>
+                        ) : (
+                          <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                            {internships.map((internship, i) => {
+                              const isBookmarked = savedJobs.some((sj) => sj.url === internship.url);
+                              return (
+                                <Card
+                                  key={i}
+                                  className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
+                                >
+                                  <div className="space-y-3">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <h3
+                                          onClick={() => setSelectedJob(internship)}
+                                          className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
+                                        >
+                                          {internship.title}
+                                        </h3>
+                                        <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
+                                          <Briefcase className="h-3 w-3 shrink-0" />
+                                          {internship.company}
+                                        </p>
+                                      </div>
+                                      <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                                        {internship.score}%
+                                      </span>
+                                    </div>
+
+                                    <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
+                                      <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                      {internship.location || "Remote"}
+                                    </p>
+
+                                    {internship.matchReasons && internship.matchReasons.length > 0 && (
+                                      <div className="mt-3 pt-3 border-t border-border/40 space-y-1.5 text-left">
+                                        <h4 className="text-[10px] font-bold text-foreground/80 uppercase tracking-wider flex items-center gap-1">
+                                          <Sparkles className="h-3 w-3 text-primary shrink-0" />
+                                          Match Insights
+                                        </h4>
+                                        <ul className="space-y-1">
+                                          {internship.matchReasons.slice(0, 2).map((reason, idx) => (
+                                            <li key={idx} className="text-[11px] text-muted-foreground leading-normal flex items-start gap-1.5">
+                                              <span className="text-primary shrink-0 mt-0.5">•</span>
+                                              <span className="line-clamp-2">{reason}</span>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => toggleSaveJob(internship)}
+                                      className="h-9 w-9 rounded-lg shrink-0"
+                                    >
+                                      {isBookmarked ? (
+                                        <BookmarkCheck className="h-4 w-4 text-primary fill-primary" />
+                                      ) : (
+                                        <Bookmark className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                    <a
+                                      href={internship.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={() => handleApplyClick(internship)}
+                                      className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
+                                    >
+                                      Apply Now
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  </div>
+                                </Card>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2 PANEL: RESUME AUDIT */}
+                  {resultsSubTab === "resume" && (
+                    <div className="grid gap-6 md:grid-cols-3 text-left animate-in fade-in-50 duration-300">
+                      {/* ATS SCORE CARD */}
+                      <Card className="p-6 flex flex-col items-center justify-center text-center shadow-md border-primary/10 bg-primary/5">
                         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                          Extracted Skills
+                          ATS Score Match
                         </h3>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {parsedSkills.length === 0 ? (
-                            <span className="text-sm text-muted-foreground italic">
-                              No skills extracted yet.
-                            </span>
-                          ) : (
-                            parsedSkills.map((skill, i) => (
-                              <Badge
-                                key={i}
-                                variant="secondary"
-                                className="px-2.5 py-1 text-xs font-medium"
-                              >
-                                {skill}
-                              </Badge>
-                            ))
+                        <div className="relative mt-4 flex items-center justify-center">
+                          <svg className="h-32 w-32 transform -rotate-90">
+                            <circle
+                              cx="64"
+                              cy="64"
+                              r="50"
+                              className="stroke-muted fill-none"
+                              strokeWidth="8"
+                            />
+                            <circle
+                              cx="64"
+                              cy="64"
+                              r="50"
+                              className="stroke-primary fill-none transition-all duration-1000 ease-out"
+                              strokeWidth="8"
+                              strokeDasharray={2 * Math.PI * 50}
+                              strokeDashoffset={2 * Math.PI * 50 * (1 - atsScore / 100)}
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                          <span className="absolute text-3xl font-extrabold text-foreground">
+                            {atsScore}%
+                          </span>
+                        </div>
+                        <p className="mt-3 text-xs text-muted-foreground">
+                          {atsScore >= 80
+                            ? "Excellent ATS suitability scan!"
+                            : "Solid match, review the optimization suggestions below."}
+                        </p>
+                      </Card>
+
+                      {/* SKILLS AND ROLES CARD */}
+                      <Card className="p-6 md:col-span-2 shadow-md space-y-4">
+                        <div className="space-y-2">
+                          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                            Extracted Skills
+                          </h3>
+                          <div className="flex flex-wrap gap-1.5">
+                            {parsedSkills.length === 0 ? (
+                              <span className="text-xs text-muted-foreground italic">No skills listed.</span>
+                            ) : (
+                              parsedSkills.map((skill, idx) => (
+                                <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5 font-semibold">
+                                  {skill}
+                                </Badge>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        {resumeData?.roles && resumeData.roles.length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-border/40">
+                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                              Target Roles
+                            </h3>
+                            <div className="flex flex-wrap gap-1.5">
+                              {resumeData.roles.map((role: string, idx: number) => (
+                                <Badge key={idx} variant="outline" className="text-[10px] px-2 py-0.5 border-primary/30 text-primary font-bold">
+                                  {role}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {resumeData?.experience && (
+                          <div className="space-y-1.5 pt-2 border-t border-border/40">
+                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                              Experience Profile
+                            </h3>
+                            <p className="text-xs text-muted-foreground leading-relaxed">
+                              {typeof resumeData.experience === "string"
+                                ? resumeData.experience
+                                : Array.isArray(resumeData.experience)
+                                  ? resumeData.experience.join(" | ")
+                                  : JSON.stringify(resumeData.experience)}
+                            </p>
+                          </div>
+                        )}
+
+                        {(resumeData?.keywords || careerAnalysis?.keywords) && (
+                          <div className="space-y-2 pt-2 border-t border-border/40">
+                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
+                              Important Keywords Added
+                            </h3>
+                            <div className="flex flex-wrap gap-1.5">
+                              {(resumeData.keywords || careerAnalysis.keywords || []).map((keyword: string, idx: number) => (
+                                <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5 bg-muted/65 text-foreground/80 font-medium">
+                                  {keyword}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </Card>
+
+                      {/* RESUME REVIEW CARD */}
+                      <Card className="p-6 md:col-span-3 shadow-md border-t border-primary/20 bg-muted/10">
+                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
+                          <FileText className="h-4 w-4 text-primary shrink-0" />
+                          ATS Suitability &amp; Resume Review
+                        </h3>
+                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
+                          {careerAnalysis?.resumeReview || careerAnalysis?.atsScore?.feedback || (
+                            `Suggestions for improvement:
+                            • Ensure keyword density represents target roles (e.g. FastAPI, Vector Databases, Python) 3-4 times.
+                            • Convert generic bullet descriptions into quantitative statements showing impact (e.g., "improved query speeds by 30%").
+                            • Avoid graphs, graphical tables, or colored columns to ensure scanner readability.`
                           )}
                         </div>
-                      </div>
-
-                      <div className="border-t border-border pt-4 mt-4 flex items-start gap-3 text-xs text-muted-foreground">
-                        <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                        <div>
-                          <span className="font-semibold text-foreground">Recruiter Tip:</span> Add
-                          more quantitative achievements (e.g. "reduced load time by 30%") to
-                          further improve this match rating.
-                        </div>
-                      </div>
-                    </Card>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div>
-                        <h2 className="text-xl font-bold tracking-tight text-foreground">
-                          Top Job Matches
-                        </h2>
-                        <p className="text-xs text-muted-foreground">
-                          Matching roles found via AI scraper, ranked by skillset compatibility.
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => setMatcherPhase("upload")}
-                        className="rounded-xl"
-                      >
-                        <RotateCcw className="mr-2 h-4 w-4" />
-                        Scrape Again
-                      </Button>
-                    </div>
-
-                    {jobs.length === 0 ? (
-                      <Card className="p-10 text-center text-muted-foreground shadow-md border-dashed">
-                        No matches found. Try a resume with different keywords.
                       </Card>
-                    ) : (
-                      <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                        {jobs.map((job, i) => {
-                          const isBookmarked = savedJobs.some((sj) => sj.url === job.url);
-                          return (
-                            <Card
-                              key={i}
-                              className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
+                    </div>
+                  )}
+
+                  {/* TAB 3 PANEL: AI CAREER STRATEGY */}
+                  {resultsSubTab === "career" && (
+                    <div className="grid gap-6 md:grid-cols-2 text-left animate-in fade-in-50 duration-300">
+                      {/* SKILL GAP ANALYSIS */}
+                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
+                        <div>
+                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
+                            <AlertCircle className="h-4 w-4 text-orange-500 shrink-0 animate-pulse" />
+                            Skill Gap Analysis
+                          </h3>
+                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40">
+                            {careerAnalysis?.skillGapAnalysis || careerAnalysis?.skillGap || (
+                              `No significant gaps detected! To boost call-backs for top-tier roles:
+                              1. Focus on hands-on deployment (e.g., Vercel, AWS or Docker containers).
+                              2. Build end-to-end portfolio projects that demonstrate database integrations.`
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* SALARY INSIGHTS */}
+                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
+                        <div>
+                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
+                            <Sparkles className="h-4 w-4 text-green-500 shrink-0" />
+                            Salary Insights
+                          </h3>
+                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40">
+                            {careerAnalysis?.salaryInsights || careerAnalysis?.salaries || (
+                              `Average Industry Annual Expectations:
+                              • AI / Machine Learning Engineer: $115,000 - $180,000+
+                              • Full-Stack Engineer (React/FastAPI): $90,000 - $150,000
+                              • Backend Developer (Node/Python): $85,000 - $140,000`
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* CAREER ROADMAP */}
+                      <Card className="p-6 md:col-span-2 shadow-md border-t border-border">
+                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-4">
+                          <RotateCcw className="h-4 w-4 text-blue-500 shrink-0" />
+                          AI Career Roadmap &amp; Milestones
+                        </h3>
+                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
+                          {careerAnalysis?.careerRoadmap || careerAnalysis?.roadmap || (
+                            `Milestones for career progression:
+                            • Phase 1: Deepen foundational frameworks (React, FastAPI/Python, SQL databases).
+                            • Phase 2: Create a live deployed full-stack project utilizing modern vector indexes.
+                            • Phase 3: Optimize resume with parsed statistics and build outreach referrals on LinkedIn.`
+                          )}
+                        </div>
+                      </Card>
+
+                      {/* LINKEDIN OPTIMIZATION */}
+                      <Card className="p-6 md:col-span-2 shadow-md border-t border-border">
+                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-4">
+                          <ExternalLink className="h-4 w-4 text-blue-600 shrink-0" />
+                          LinkedIn Profile Optimization
+                        </h3>
+                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
+                          {careerAnalysis?.linkedinOptimization || careerAnalysis?.linkedin || (
+                            `Voted strategic tips to capture recruiter searches:
+                            • Headline: "AI / Full-Stack Engineer | React, FastAPI, SQL | Building Scalable RAG Pipelines"
+                            • Summary Section: Focus on quantitative capstone impact and standard technology keyword indexes.
+                            • Skill Section: Add exact keyword targets (FastAPI, React, SQL, Vector Index, Python).`
+                          )}
+                        </div>
+                      </Card>
+                    </div>
+                  )}
+
+                  {/* TAB 4 PANEL: PREP & TOOLS */}
+                  {resultsSubTab === "tools" && (
+                    <div className="grid gap-6 md:grid-cols-2 text-left animate-in fade-in-50 duration-300">
+                      {/* INTERVIEW PRACTICE */}
+                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
+                        <div>
+                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
+                            <MessageSquare className="h-4 w-4 text-purple-500 shrink-0" />
+                            Interview Practice Questions
+                          </h3>
+                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40 h-80 overflow-y-auto">
+                            {careerAnalysis?.interviewPractice || careerAnalysis?.interviewQuestions || (
+                              `Focus on these common technical interview targets:
+                              1. Explain the stateless nature of REST APIs and how systems manage session data.
+                              2. How do you implement database caching to speed up high-volume API requests?
+                              3. Walk me through a full-stack project architecture and your favorite state-management patterns.`
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+
+                      {/* COVER LETTER GENERATOR */}
+                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
+                        <div className="space-y-3">
+                          <h3 className="text-sm font-bold text-foreground flex items-center justify-between gap-1.5">
+                            <span className="flex items-center gap-1.5">
+                              <FileText className="h-4 w-4 text-primary shrink-0" />
+                              Custom Cover Letter Generator
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-[10px] font-bold rounded-lg"
+                              onClick={() => {
+                                const letter = careerAnalysis?.coverLetter || careerAnalysis?.coverLetterTemplate || "Dear Hiring Team...";
+                                navigator.clipboard.writeText(letter);
+                                toast.success("Cover letter copied to clipboard!");
+                              }}
                             >
-                              <div className="space-y-3">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <h3
-                                      onClick={() => setSelectedJob(job)}
-                                      className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
-                                    >
-                                      {job.title}
-                                    </h3>
-                                    <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
-                                      <Briefcase className="h-3 w-3 shrink-0" />
-                                      {job.company}
-                                    </p>
-                                  </div>
-                                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                                    {job.score}
-                                  </span>
-                                </div>
+                              Copy Letter
+                            </Button>
+                          </h3>
+                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40 h-80 overflow-y-auto font-mono">
+                            {careerAnalysis?.coverLetter || careerAnalysis?.coverLetterTemplate || (
+                              `Dear Hiring Manager,
 
-                                <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
-                                  <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                  {job.location || "Remote"}
-                                </p>
+                              I am writing to express my eager interest in the Engineering / AI developer position. With a strong background in frameworks like React, Node.js, and Python/FastAPI, I am confident in my capacity to add value to your codebase.
 
-                                {job.skills && (
-                                  <div className="flex flex-wrap gap-1 mt-2">
-                                    {job.skills
-                                      .split(",")
-                                      .slice(0, 3)
-                                      .map((s, idx) => (
-                                        <span
-                                          key={idx}
-                                          className="bg-muted px-1.5 py-0.5 rounded text-[10px] text-muted-foreground"
-                                        >
-                                          {s.trim()}
-                                        </span>
-                                      ))}
-                                  </div>
-                                )}
-                              </div>
+                              I look forward to discussing how my experience aligns with your current team projects.
 
-                              <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => toggleSaveJob(job)}
-                                  className="h-9 w-9 rounded-lg shrink-0"
-                                >
-                                  {isBookmarked ? (
-                                    <BookmarkCheck className="h-4 w-4 text-primary fill-primary" />
-                                  ) : (
-                                    <Bookmark className="h-4 w-4" />
-                                  )}
-                                </Button>
-                                <a
-                                  href={job.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
-                                >
-                                  Apply Now
-                                  <ExternalLink className="h-4 w-4" />
-                                </a>
-                              </div>
-                            </Card>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                              Sincerely,
+                              ${profile?.full_name || "Applicant"}`
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1929,6 +2569,7 @@ function Dashboard() {
                           href={job.url}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={() => handleApplyClick(job)}
                           className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
                         >
                           Apply Now
@@ -2358,6 +2999,23 @@ function Dashboard() {
                     </p>
                   </div>
                 )}
+
+                {selectedJob.matchReasons && selectedJob.matchReasons.length > 0 && (
+                  <div className="space-y-1.5">
+                    <h4 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1">
+                      <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+                      AI Match Analysis
+                    </h4>
+                    <ul className="space-y-2 bg-muted/40 dark:bg-muted/10 p-3 rounded-xl border border-border/40 text-left">
+                      {selectedJob.matchReasons.map((reason, idx) => (
+                        <li key={idx} className="text-xs leading-relaxed text-muted-foreground flex items-start gap-2">
+                          <span className="text-primary font-bold mt-0.5 shrink-0">•</span>
+                          <span>{reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               <DialogFooter className="flex gap-2 border-t border-border pt-4">
@@ -2386,7 +3044,10 @@ function Dashboard() {
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-primary text-primary-foreground font-bold hover:opacity-90 transition-all h-10 text-sm shadow-sm"
-                  onClick={() => setSelectedJob(null)}
+                  onClick={() => {
+                    handleApplyClick(selectedJob);
+                    setSelectedJob(null);
+                  }}
                 >
                   Apply Directly
                   <ExternalLink className="h-4 w-4" />

@@ -13,6 +13,8 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthSignupRouteImport } from './routes/auth/signup'
 import { Route as AuthSigninRouteImport } from './routes/auth/signin'
+import { Route as AuthResetpasswordRouteImport } from './routes/auth/resetpassword'
+import { Route as AuthForgotpasswordRouteImport } from './routes/auth/forgotpassword'
 
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
@@ -34,16 +36,30 @@ const AuthSigninRoute = AuthSigninRouteImport.update({
   path: '/auth/signin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthResetpasswordRoute = AuthResetpasswordRouteImport.update({
+  id: '/auth/resetpassword',
+  path: '/auth/resetpassword',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthForgotpasswordRoute = AuthForgotpasswordRouteImport.update({
+  id: '/auth/forgotpassword',
+  path: '/auth/forgotpassword',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/auth/forgotpassword': typeof AuthForgotpasswordRoute
+  '/auth/resetpassword': typeof AuthResetpasswordRoute
   '/auth/signin': typeof AuthSigninRoute
   '/auth/signup': typeof AuthSignupRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/auth/forgotpassword': typeof AuthForgotpasswordRoute
+  '/auth/resetpassword': typeof AuthResetpasswordRoute
   '/auth/signin': typeof AuthSigninRoute
   '/auth/signup': typeof AuthSignupRoute
 }
@@ -51,20 +67,43 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
+  '/auth/forgotpassword': typeof AuthForgotpasswordRoute
+  '/auth/resetpassword': typeof AuthResetpasswordRoute
   '/auth/signin': typeof AuthSigninRoute
   '/auth/signup': typeof AuthSignupRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/auth/signin' | '/auth/signup'
+  fullPaths:
+    | '/'
+    | '/dashboard'
+    | '/auth/forgotpassword'
+    | '/auth/resetpassword'
+    | '/auth/signin'
+    | '/auth/signup'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/auth/signin' | '/auth/signup'
-  id: '__root__' | '/' | '/dashboard' | '/auth/signin' | '/auth/signup'
+  to:
+    | '/'
+    | '/dashboard'
+    | '/auth/forgotpassword'
+    | '/auth/resetpassword'
+    | '/auth/signin'
+    | '/auth/signup'
+  id:
+    | '__root__'
+    | '/'
+    | '/dashboard'
+    | '/auth/forgotpassword'
+    | '/auth/resetpassword'
+    | '/auth/signin'
+    | '/auth/signup'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
+  AuthForgotpasswordRoute: typeof AuthForgotpasswordRoute
+  AuthResetpasswordRoute: typeof AuthResetpasswordRoute
   AuthSigninRoute: typeof AuthSigninRoute
   AuthSignupRoute: typeof AuthSignupRoute
 }
@@ -99,12 +138,28 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthSigninRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/auth/resetpassword': {
+      id: '/auth/resetpassword'
+      path: '/auth/resetpassword'
+      fullPath: '/auth/resetpassword'
+      preLoaderRoute: typeof AuthResetpasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/forgotpassword': {
+      id: '/auth/forgotpassword'
+      path: '/auth/forgotpassword'
+      fullPath: '/auth/forgotpassword'
+      preLoaderRoute: typeof AuthForgotpasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
+  AuthForgotpasswordRoute: AuthForgotpasswordRoute,
+  AuthResetpasswordRoute: AuthResetpasswordRoute,
   AuthSigninRoute: AuthSigninRoute,
   AuthSignupRoute: AuthSignupRoute,
 }

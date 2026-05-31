@@ -32,6 +32,7 @@ interface AuthContextType {
   updateProfile: (updates: Partial<UserProfile>) => Promise<boolean>;
   refreshProfile: () => Promise<void>;
   incrementTrialsUsed: () => Promise<boolean>;
+  resetPassword: (email: string) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -61,7 +62,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (error) {
           if (error.code === "PGRST116") {
-            console.log("Profile not found in database, auto-creating profile row for user:", userId);
             try {
               const { data: { user: currentUser } } = await supabase.auth.getUser();
               const fullName = currentUser?.user_metadata?.full_name || currentUser?.email?.split("@")[0] || "New User";
@@ -561,6 +561,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const resetPassword = async (email: string): Promise<boolean> => {
+    if (isMockMode) {
+      toast.success("Demo Recovery Code sent!", {
+        description: "Password reset link simulated for demo email successfully.",
+      });
+      return true;
+    }
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/resetpassword`,
+      });
+
+      if (error) {
+        toast.error("Password reset failed", { description: error.message });
+        return false;
+      }
+
+      toast.success("Check your inbox!", {
+        description: "A password recovery link has been sent to your email address.",
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Error sending reset request", { description: msg });
+      return false;
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -575,6 +604,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateProfile,
         refreshProfile,
         incrementTrialsUsed,
+        resetPassword,
       }}
     >
       {children}

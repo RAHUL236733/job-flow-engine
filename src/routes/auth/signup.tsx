@@ -39,6 +39,8 @@ function SignUp() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting || isLoading) return; // Prevent duplicate clicks from rapid clicking
+
     if (!fullName || !email || !password) {
       toast.error("Missing fields", { description: "Please fill in all fields." });
       return;
@@ -107,7 +109,7 @@ function SignUp() {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   className="pl-10 h-11"
-                  disabled={submitting}
+                  disabled={submitting || isLoading}
                 />
               </div>
             </div>
@@ -126,7 +128,7 @@ function SignUp() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-10 h-11"
-                  disabled={submitting}
+                  disabled={submitting || isLoading}
                 />
               </div>
             </div>
@@ -145,12 +147,13 @@ function SignUp() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10 pr-10 h-11"
-                  disabled={submitting}
+                  disabled={submitting || isLoading}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
+                  disabled={submitting || isLoading}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
@@ -159,10 +162,10 @@ function SignUp() {
 
             <Button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || isLoading}
               className="h-11 w-full rounded-xl text-base font-semibold"
             >
-              {submitting ? (
+              {submitting || isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Creating Account...
