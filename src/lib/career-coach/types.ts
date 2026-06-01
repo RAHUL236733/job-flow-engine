@@ -10,14 +10,14 @@ export type CoachActionType =
   | "Job Recommendations";
 
 export type StoredAnalysis = {
-  resumeReview: string;
-  atsScore: { score: number; feedback: string };
-  skillGapAnalysis: string;
-  salaryInsights: string;
-  careerRoadmap: string;
-  linkedinOptimization: string;
-  interviewPractice: string;
-  coverLetter: string;
+  resumeReview: unknown;
+  atsScore: { score: number; feedback: unknown };
+  skillGapAnalysis: unknown;
+  salaryInsights: unknown;
+  careerRoadmap: unknown;
+  linkedinOptimization: unknown;
+  interviewPractice: unknown;
+  coverLetter: unknown;
   jobRecommendations: string;
 };
 

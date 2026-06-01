@@ -180,7 +180,7 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
   ) {
     if (assistantMode !== "interview") {
       const stored = analysis.interviewPractice;
-      if (stored.trim()) {
+      if (stored && (typeof stored === "object" || (typeof stored === "string" && stored.trim()))) {
         return { text: formatInterview(stored), nextAssistantMode: "interview", nextInterviewStep: 1 };
       }
       return {
@@ -233,7 +233,7 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
     lower.includes("become a")
   ) {
     const stored = analysis.careerRoadmap;
-    if (stored.trim()) {
+    if (stored && (typeof stored === "object" || (typeof stored === "string" && stored.trim()))) {
       return { text: formatRoadmap(stored) };
     }
     let role = "AI Engineer";
@@ -292,7 +292,9 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
 
   if (actionType === "Resume Review" || (lower.includes("resume") && !lower.includes("upload"))) {
     const stored = analysis.resumeReview;
-    if (stored.trim()) return { text: formatResumeReview(stored, resumeName) };
+    if (stored && (typeof stored === "object" || (typeof stored === "string" && stored.trim()))) {
+      return { text: formatResumeReview(stored, resumeName) };
+    }
     return {
       text: formatResumeReview(
         null,
@@ -308,7 +310,11 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
 
   if (actionType === "ATS Score Check" || lower.includes("ats")) {
     const fb = analysis.atsScore.feedback || analysis.atsScore;
-    if (analysis.atsScore.feedback?.trim() || score > 0) {
+    const hasFb =
+      (typeof fb === "object" && fb !== null) ||
+      (typeof fb === "string" && fb.trim()) ||
+      score > 0;
+    if (hasFb) {
       return { text: formatAtsResponse(score, fb) };
     }
     return {
@@ -330,14 +336,18 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
   }
 
   if (actionType === "Skill Gap Analysis" || lower.includes("skill") || lower.includes("learn")) {
-    if (analysis.skillGapAnalysis.trim()) {
-      return { text: formatSkillGap(analysis.skillGapAnalysis, parsedSkills) };
+    const sg = analysis.skillGapAnalysis;
+    if (sg && (typeof sg === "object" || (typeof sg === "string" && sg.trim()))) {
+      return { text: formatSkillGap(sg, parsedSkills) };
     }
     return { text: formatSkillGap(null, parsedSkills.length ? parsedSkills : skillsStr.split(",").map((s) => s.trim())) };
   }
 
   if (actionType === "Salary Insights" || lower.includes("salary") || lower.includes("lpa") || lower.includes("how much")) {
-    if (analysis.salaryInsights.trim()) return { text: formatSalary(analysis.salaryInsights) };
+    const sal = analysis.salaryInsights;
+    if (sal && (typeof sal === "object" || (typeof sal === "string" && sal.trim()))) {
+      return { text: formatSalary(sal) };
+    }
     return {
       text: formatSalary({
         entryLevel: "₹6 LPA – ₹12 LPA",
@@ -348,7 +358,10 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
   }
 
   if (actionType === "LinkedIn Optimization" || lower.includes("linkedin")) {
-    if (analysis.linkedinOptimization.trim()) return { text: formatLinkedIn(analysis.linkedinOptimization) };
+    const li = analysis.linkedinOptimization;
+    if (li && (typeof li === "object" || (typeof li === "string" && li.trim()))) {
+      return { text: formatLinkedIn(li) };
+    }
     return {
       text: formatLinkedIn(
         "• **Headline:** AI Engineer | Python · React · FastAPI | Building GenAI products\n\n• **About:** Lead with impact metrics and your top 5 skills.\n\n• **Featured:** Pin resume, GitHub, and best project.\n\n• **Skills:** List 50 skills; pin your top 3 role keywords.",
@@ -357,8 +370,9 @@ export function buildCoachResponse(ctx: BuildResponseContext): CoachResponse {
   }
 
   if (actionType === "Cover Letter Generator" || lower.includes("cover letter")) {
-    if (analysis.coverLetter.trim()) {
-      return { text: formatCoverLetter(analysis.coverLetter, profileName, profileEmail) };
+    const cl = analysis.coverLetter;
+    if (cl && (typeof cl === "object" || (typeof cl === "string" && cl.trim()))) {
+      return { text: formatCoverLetter(cl, profileName, profileEmail) };
     }
     return { text: formatCoverLetter(null, profileName, profileEmail) };
   }

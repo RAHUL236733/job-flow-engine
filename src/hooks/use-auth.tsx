@@ -5,19 +5,28 @@ import { toast } from "sonner";
 
 export interface UserProfile {
   id: string;
+  user_id?: string;
   email: string;
-  full_name: string | null;
-  avatar_url: string | null;
-  skills: string | null;
-  ats_score: number;
-  resume_url: string | null;
-  resume_name: string | null;
-  experience_level: string;
-  preferred_role: string | null;
-  preferred_location: string | null;
-  job_type: string;
+  full_name?: string | null;
+  target_location?: string | null;
+  target_job_title?: string | null;
+  experience_level?: string | null;
+  preferred_job_type?: string | null;
+  skills?: string[] | string | null;
+  profile_score?: number;
+  ats_score?: number;
+  resume_uploaded?: boolean;
+  created_at?: string;
   updated_at: string;
   trials_used?: number;
+
+  // Backward compatibility fields
+  avatar_url?: string | null;
+  resume_url?: string | null;
+  resume_name?: string | null;
+  job_type?: string;
+  preferred_role?: string | null;
+  preferred_location?: string | null;
 }
 
 interface AuthContextType {
@@ -54,10 +63,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     async (userId: string): Promise<UserProfile | null> => {
       if (!checkConfig) return null;
       try {
+        console.log("Fetching profile from 'profiles' table for user:", userId);
         const { data, error } = await supabase
-          .from("user_profiles")
+          .from("profiles")
           .select("*")
-          .eq("id", userId)
+          .eq("user_id", userId)
           .single();
 
         if (error) {
@@ -67,47 +77,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               const fullName = currentUser?.user_metadata?.full_name || currentUser?.email?.split("@")[0] || "New User";
               
               const newProfile = {
-                id: userId,
+                user_id: userId,
                 email: currentUser?.email || "",
                 full_name: fullName,
-                avatar_url: null,
-                skills: "",
-                ats_score: 0,
-                resume_url: null,
-                resume_name: null,
                 experience_level: "Freshman/Student",
-                preferred_role: null,
-                preferred_location: null,
-                job_type: "All",
-                updated_at: new Date().toISOString()
+                preferred_job_type: "All",
+                skills: []
               };
 
+              console.log("Profile not found in profiles table, auto-creating initial profiles row...");
               const { data: insertedData, error: insertErr } = await supabase
-                .from("user_profiles")
+                .from("profiles")
                 .insert(newProfile)
                 .select("*")
                 .single();
 
               if (insertErr) {
                 console.error("Failed to auto-create profile row:", insertErr);
-                return newProfile as UserProfile;
+                return {
+                  id: userId,
+                  ...newProfile,
+                  updated_at: new Date().toISOString()
+                } as UserProfile;
               }
+              console.log("Successfully auto-created profile row in Supabase:", insertedData);
               return insertedData as UserProfile;
             } catch (createErr) {
               console.error("Exception during profile auto-creation:", createErr);
               return {
                 id: userId,
+                user_id: userId,
                 email: "",
                 full_name: "New User",
-                avatar_url: null,
-                skills: "",
-                ats_score: 0,
-                resume_url: null,
-                resume_name: null,
                 experience_level: "Freshman/Student",
-                preferred_role: null,
-                preferred_location: null,
-                job_type: "All",
+                preferred_job_type: "All",
+                skills: [],
                 updated_at: new Date().toISOString()
               } as UserProfile;
             }
@@ -115,6 +119,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error("Error fetching user profile:", error);
           return null;
         }
+        
+        console.log("Profile successfully loaded from Supabase profiles table:", data);
         
         // Merge rich profile extras if present in local cache
         const resData = data as UserProfile;
@@ -208,13 +214,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(p);
           setIsLoading(false);
           initialChecked.current = true;
+
+          // Added Console Logs for Debugging
+          console.log("Current User:", currentSession.user);
+          console.log("Profile Data:", p);
+          console.log("Session:", currentSession);
         }
       } else {
         setProfile(null);
         setIsLoading(false);
         initialChecked.current = true;
+
+        // Added Console Logs for Debugging
+        console.log("Current User:", null);
+        console.log("Profile Data:", null);
+        console.log("Session:", null);
       }
     };
+
+    // Fetch initial session on mount for persistence across refreshes
+    const initAuth = async () => {
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (isMounted) {
+          await handleAuthEvent("INITIAL_SESSION", currentSession);
+        }
+      } catch (err) {
+        console.error("Error loading session on mount:", err);
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    initAuth();
 
     // Listen for subsequent auth changes
     const {
@@ -251,7 +282,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         preferred_location: null,
         job_type: "All",
         updated_at: new Date().toISOString(),
-      };
+      } as UserProfile;
 
       setUser(mockUser);
       setProfile(mockProfile);
@@ -297,17 +328,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const mockProfile: UserProfile = {
         id: "mock-user-uuid",
+        user_id: "mock-user-uuid",
         email,
         full_name: fullName,
-        avatar_url: null,
-        skills: "",
-        ats_score: 0,
-        resume_url: null,
-        resume_name: null,
+        skills: [],
         experience_level: "Freshman/Student",
-        preferred_role: null,
-        preferred_location: null,
-        job_type: "All",
+        target_job_title: null,
+        target_location: null,
+        preferred_job_type: "All",
         updated_at: new Date().toISOString(),
       };
 
@@ -318,6 +346,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         JSON.stringify({ user: mockUser, profile: mockProfile }),
       );
       toast.success("Account created successfully (Demo Mode)");
+      
+      console.log("Current User (Mock SignUp):", mockUser);
+      console.log("Profile Data (Mock SignUp):", mockProfile);
       return true;
     }
 
@@ -339,10 +370,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
 
+      console.log("Supabase Auth SignUp successful. User object:", data.user);
+
+      if (data.user) {
+        console.log("Auth user created. Inserting initial profile row into profiles table...");
+        const { error: profileErr } = await supabase
+          .from("profiles")
+          .insert({
+            user_id: data.user.id,
+            full_name: fullName,
+            email: email,
+            experience_level: "Freshman/Student",
+            preferred_job_type: "All",
+            skills: []
+          });
+
+        if (profileErr) {
+          console.error("Failed to insert profile row during signup:", profileErr);
+        } else {
+          console.log("Profile row successfully created for user:", data.user.id);
+        }
+      }
+
       // If email confirmation is required by Supabase, notify the user.
       // Otherwise, the session is created automatically.
       if (data.session) {
         toast.success("Registration successful!", { description: "Your account is ready." });
+        console.log("Session (SignUp):", data.session);
       } else {
         toast.success("Verification email sent!", {
           description: "Please check your inbox to confirm your account.",
@@ -359,11 +413,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async () => {
+    console.log("Initiating Sign Out...");
     if (isMockMode) {
       setUser(null);
       setProfile(null);
       localStorage.removeItem("mock_session");
+      localStorage.clear();
       toast.success("Logged out successfully");
+      console.log("Sign out successful (Mock Mode cleared)");
       return;
     }
 
@@ -378,14 +435,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Error signing out", { description: msg });
     } finally {
-      // ALWAYS clear local session states on client to guarantee logout
+      // ALWAYS clear local session states and localStorage on client to guarantee logout
       setUser(null);
       setProfile(null);
       sessionRef.current = null;
       userRef.current = null;
+      localStorage.clear();
+      console.log("Sign out cleanup completed. Local storage cleared.");
     }
   };
-
   const updateProfile = async (updates: Partial<UserProfile>): Promise<boolean> => {
     if (isMockMode) {
       const newProfile = {
@@ -401,98 +459,99 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem("mock_session", JSON.stringify(parsed));
       }
       toast.success("Profile updated locally (Demo Mode)");
+      
+      console.log("Current User (Mock Update):", user);
+      console.log("Profile Data (Mock Update):", newProfile);
       return true;
     }
 
     if (!user) return false;
 
     try {
-      // Check if user profile already exists
+      console.log("Updating profile in Supabase profiles table for user:", user.id);
+      console.log("Profile updates payload:", updates);
+
+      // Check if user profile already exists in profiles
       const { data: existingProfile, error: fetchErr } = await supabase
-        .from("user_profiles")
+        .from("profiles")
         .select("id")
-        .eq("id", user.id)
+        .eq("user_id", user.id)
         .maybeSingle();
 
       if (fetchErr) {
         console.error("Error checking existing profile:", fetchErr);
       }
 
-      let error;
-      const payload = {
-        ...updates,
+      // Map columns correctly
+      const payload: any = {
+        full_name: updates.full_name !== undefined ? updates.full_name : profile?.full_name,
+        experience_level: updates.experience_level !== undefined ? updates.experience_level : profile?.experience_level,
+        preferred_job_type: updates.preferred_job_type !== undefined ? updates.preferred_job_type : (updates.job_type !== undefined ? updates.job_type : profile?.preferred_job_type),
+        target_job_title: updates.target_job_title !== undefined ? updates.target_job_title : (updates.preferred_role !== undefined ? updates.preferred_role : profile?.target_job_title),
+        target_location: updates.target_location !== undefined ? updates.target_location : (updates.preferred_location !== undefined ? updates.preferred_location : profile?.target_location),
+        profile_score: updates.profile_score !== undefined ? updates.profile_score : profile?.profile_score,
+        ats_score: updates.ats_score !== undefined ? updates.ats_score : profile?.ats_score,
+        resume_uploaded: updates.resume_uploaded !== undefined ? updates.resume_uploaded : profile?.resume_uploaded,
         updated_at: new Date().toISOString(),
       };
 
-      const runUpdate = async (fields: any) => {
-        if (!existingProfile) {
-          return await supabase.from("user_profiles").insert({
-            id: user.id,
-            email: user.email!,
-            full_name: user.user_metadata?.full_name || null,
-            ...fields,
-          });
-        } else {
-          return await supabase.from("user_profiles").update(fields).eq("id", user.id);
+      if (updates.skills !== undefined) {
+        if (Array.isArray(updates.skills)) {
+          payload.skills = updates.skills;
+        } else if (typeof updates.skills === "string") {
+          payload.skills = updates.skills.split(",").map(s => s.trim()).filter(Boolean);
+        } else if (updates.skills === null) {
+          payload.skills = [];
         }
-      };
+      }
 
-      const res = await runUpdate(payload);
-      error = res.error;
-
-      // Handle missing DB columns error (fallback by saving extras in localStorage)
-      if (error && (error.message.includes("column") || error.code === "42703")) {
-        console.warn("Missing database columns for rich profile fields, falling back to local storage backup.");
-        const basicFields = {
-          full_name: updates.full_name,
-          experience_level: updates.experience_level,
-          preferred_role: updates.preferred_role,
-          preferred_location: updates.preferred_location,
-          job_type: updates.job_type,
-          skills: updates.skills,
-          updated_at: new Date().toISOString(),
-        };
-        const extraFields = {
-          education_school: (updates as any).education_school,
-          education_degree: (updates as any).education_degree,
-          education_year: (updates as any).education_year,
-          experience_title: (updates as any).experience_title,
-          experience_company: (updates as any).experience_company,
-          experience_duration: (updates as any).experience_duration,
-          experience_desc: (updates as any).experience_desc,
-          certifications: (updates as any).certifications,
-        };
-        localStorage.setItem(`profile_extras_${user.id}`, JSON.stringify(extraFields));
-        
-        const fallbackRes = await runUpdate(basicFields);
-        error = fallbackRes.error;
+      let error;
+      if (!existingProfile) {
+        console.log("No existing profile row found, inserting new profiles row...");
+        const res = await supabase.from("profiles").insert({
+          user_id: user.id,
+          email: user.email!,
+          ...payload,
+        });
+        error = res.error;
+      } else {
+        console.log("Existing profile row found, updating profiles row...");
+        const res = await supabase.from("profiles").update(payload).eq("user_id", user.id);
+        error = res.error;
       }
 
       if (error) {
+        console.error("Supabase Profiles Update Error:", error);
         toast.error("Failed to update profile", { description: error.message });
         return false;
       }
 
-      setProfile((prev) => (prev ? { ...prev, ...updates } : {
-        id: user.id,
+      const updatedProfileState = {
+        id: profile?.id || user.id,
+        user_id: user.id,
         email: user.email!,
-        full_name: user.user_metadata?.full_name || null,
-        avatar_url: null,
-        skills: null,
-        ats_score: 0,
-        resume_url: null,
-        resume_name: null,
-        experience_level: "Freshman/Student",
-        preferred_role: null,
-        preferred_location: null,
-        job_type: "All",
-        updated_at: new Date().toISOString(),
+        full_name: payload.full_name,
+        experience_level: payload.experience_level,
+        preferred_job_type: payload.preferred_job_type,
+        target_job_title: payload.target_job_title,
+        target_location: payload.target_location,
+        profile_score: payload.profile_score || 0,
+        ats_score: payload.ats_score || 0,
+        resume_uploaded: !!payload.resume_uploaded,
+        skills: payload.skills || profile?.skills || [],
+        updated_at: payload.updated_at,
         ...updates
-      }));
+      } as UserProfile;
+
+      setProfile(updatedProfileState);
       toast.success("Profile updated successfully!");
+      
+      console.log("Current User (Post-Update):", user);
+      console.log("Profile Data (Post-Update):", updatedProfileState);
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error("Profile update exception:", err);
       toast.error("Profile update failed", { description: msg });
       return false;
     }

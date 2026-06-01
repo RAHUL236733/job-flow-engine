@@ -6,6 +6,30 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabase";
+import { AnalysisProvider, useAnalysis } from "@/hooks/use-analysis";
+import {
+  isValidN8nPayload,
+  N8N_ANALYSIS_TIMEOUT_MS,
+  N8N_WAIT_PIPELINE_STEPS,
+  flattenN8nPayload,
+  parseN8nResponse,
+  SERVICE_UNAVAILABLE_MESSAGE,
+  trackedJobsFromAnalysis,
+} from "@/lib/n8n-response";
+import {
+  clearAllTrackerData,
+  deleteApplicationFromStore,
+  fetchApplications,
+  fetchSavedJobs,
+  insertApplication,
+  normalizeJob,
+  removeSavedJobFromStore,
+  saveJobToStore,
+  updateApplicationStatus,
+} from "@/lib/job-tracker";
+import { COACH_TOOLS, getCoachToolByTab } from "@/lib/career-tools-config";
+import { CoachToolPageView } from "@/components/coach/CoachToolPageView";
 import {
   Sparkles,
   LayoutDashboard,
@@ -37,11 +61,16 @@ import {
   X,
   PlusCircle,
   Check,
-  Loader2
+  Loader2,
+  FileSignature
 } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
-  component: DashboardLayout,
+  component: () => (
+    <AnalysisProvider>
+      <DashboardLayout />
+    </AnalysisProvider>
+  ),
 });
 
 // Generic Ripple Card Component for premium click ripples with warm gold overlays
@@ -295,6 +324,7 @@ const PipelineStepCard = ({
 
 function DashboardLayout() {
   const { user, profile, updateProfile, signOut, signIn, isMockMode } = useAuth();
+  const { analysis, saveAnalysis, refreshAnalysis } = useAnalysis();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -323,35 +353,79 @@ function DashboardLayout() {
   const [skillsList, setSkillsList] = useState<string[]>([]);
 
   useEffect(() => {
+    const authEmail = user?.email || "";
+    const authName =
+      (typeof user?.user_metadata?.full_name === "string" && user.user_metadata.full_name) || "";
+
     if (profile) {
       setProfileForm({
-        fullName: profile.full_name || "",
-        email: profile.email || "",
+        fullName: profile.full_name || authName || "",
+        email: profile.email || authEmail,
         experienceLevel: profile.experience_level || "Freshman/Student",
         preferredJobType: profile.job_type || "Internship",
         targetJobTitle: profile.preferred_role || "",
         targetCityState: profile.preferred_location || "",
       });
       if (profile.skills) {
-        setSkillsList(profile.skills.split(",").filter(Boolean));
+        if (Array.isArray(profile.skills)) {
+          setSkillsList(profile.skills);
+        } else if (typeof profile.skills === "string") {
+          setSkillsList(profile.skills.split(",").map((s) => s.trim()).filter(Boolean));
+        }
       }
+    } else if (user) {
+      setProfileForm((prev) => ({
+        ...prev,
+        fullName: prev.fullName || authName,
+        email: prev.email || authEmail,
+      }));
     }
-  }, [profile]);
+  }, [profile, user]);
 
-  // Checklist interactive states (Starts fully uncompleted to support zero default metrics)
-  const [checklist, setChecklist] = useState({
-    resume: false,
-    atsAudit: false,
-    matchJobs: false,
-    applyRoles: false,
-  });
+  // Load saved jobs & applications from Supabase only (per-user, not localStorage)
+  useEffect(() => {
+    if (!user || isMockMode) {
+      setSavedJobsList([]);
+      setApplications([]);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const [saved, apps] = await Promise.all([
+          fetchSavedJobs(user.id),
+          fetchApplications(user.id),
+        ]);
+        if (cancelled) return;
+        setSavedJobsList(saved);
+        setApplications(apps);
+        
+        if (apps.length > 0) {
+        }
+      } catch (err) {
+        console.error("Failed to load job tracker data:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, isMockMode]);
+
+  // Hydrate matcher lists + skills whenever latest n8n analysis loads from Supabase
+  useEffect(() => {
+    if (!analysis) return;
+    const { jobs, internships } = trackedJobsFromAnalysis(analysis);
+    if (jobs.length) setJobsList(jobs);
+    if (internships.length) setInternshipsList(internships);
+    if (analysis.skills?.length) setSkillsList(analysis.skills);
+  }, [analysis]);
 
   const [resumeFile, setResumeFile] = useState<{ name: string; size: string } | null>(null);
 
   // Saved Jobs tracking
   const [savedJobsList, setSavedJobsList] = useState<any[]>([]);
-
-  // Applications list
   const [applications, setApplications] = useState<any[]>([]);
 
   // Job Matcher Sub-system states
@@ -359,6 +433,8 @@ function DashboardLayout() {
   const [selectedRoleType, setSelectedRoleType] = useState("All");
   const [isScraping, setIsScraping] = useState(false);
   const [jobsList, setJobsList] = useState<any[]>([]);
+  const [internshipsList, setInternshipsList] = useState<any[]>([]);
+  const [matcherView, setMatcherView] = useState<"jobs" | "internships">("jobs");
   const [n8nResponse, setN8nResponse] = useState<any>(null);
 
   const [pipelineStatus, setPipelineStatus] = useState<{
@@ -376,27 +452,28 @@ function DashboardLayout() {
   const [matchesRemaining, setMatchesRemaining] = useState<number>(3);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
-  // Setup initial completed checklist items on first load to trigger animations
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setChecklist({
-        resume: false,
-        atsAudit: false,
-        matchJobs: false,
-        applyRoles: false,
+  const displayName =
+    profileForm.fullName ||
+    profile?.full_name ||
+    (typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "") ||
+    user?.email?.split("@")[0] ||
+    "User";
+
+  const displayEmail = profileForm.email || profile?.email || user?.email || "";
+
+  const ensureTrackerPersistence = () => {
+    if (!user) {
+      toast.error("Sign in required");
+      return false;
+    }
+    if (isMockMode) {
+      toast.error("Supabase required", {
+        description: "Saved jobs and applications are stored in your Supabase account, not on this device.",
       });
-      setResumeFile(null);
-      setProfileForm((prev) => ({
-        ...prev,
-        fullName: "",
-        email: "",
-        targetJobTitle: "",
-        targetCityState: "",
-      }));
-      setSkillsList([]);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, []);
+      return false;
+    }
+    return true;
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -520,400 +597,163 @@ function DashboardLayout() {
     const formData = new FormData();
     formData.append("resume", file);
 
-    const uploadToastId = toast.loading("Processing resume with AI...", {
-      description: "Uploading file to n8n Railway webhook...",
+    const uploadToastId = toast.loading("Analyzing with n8n…", {
+      description: "Please wait — AI processing can take up to 2 minutes.",
+      duration: Infinity,
     });
 
-    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-    // AbortController for network timeout (25 seconds limit)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000);
+    const timeoutId = setTimeout(() => controller.abort(), N8N_ANALYSIS_TIMEOUT_MS);
+
+    let waitStepIndex = 0;
+    const progressTimer = setInterval(() => {
+      const step = N8N_WAIT_PIPELINE_STEPS[waitStepIndex];
+      if (step) {
+        setPipelineStatus({
+          step: step.step,
+          progress: step.progress,
+          details: step.details,
+          isFallback: false,
+        });
+        waitStepIndex = Math.min(waitStepIndex + 1, N8N_WAIT_PIPELINE_STEPS.length - 1);
+      }
+    }, 12_000);
+
+    const failAnalysis = (restoreFile: boolean) => {
+      clearInterval(progressTimer);
+      clearTimeout(timeoutId);
+      setIsScraping(false);
+      setPipelineStatus({
+        step: "failed",
+        progress: 0,
+        details: SERVICE_UNAVAILABLE_MESSAGE,
+        isFallback: false,
+      });
+      if (restoreFile) {
+        setStagedFile(file);
+      }
+      toast.error("Service unavailable", {
+        id: uploadToastId,
+        description: "Try again later.",
+      });
+    };
 
     try {
       setPipelineStatus({
         step: "analyzing",
-        progress: 25,
-        details: "Uploading payload to n8n Railway webhook nodes...",
+        progress: 8,
+        details: N8N_WAIT_PIPELINE_STEPS[0].details,
         isFallback: false,
       });
 
       const response = await fetch(API_URL, {
         method: "POST",
         body: formData,
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
+      clearInterval(progressTimer);
 
       console.group("UPLOAD DEBUG");
-      console.log("File Name:", file.name);
-      console.log("File Size:", file.size);
-      console.log("API URL:", API_URL);
-      console.log("Response:", response);
-      console.log("Response Status:", response.status);
+      console.log("File:", file.name, "Status:", response.status, "URL:", API_URL);
       console.groupEnd();
 
       if (!response.ok) {
-        let errDetails = `Upload failed. Status: ${response.status}`;
-        try {
-          const errText = await response.text();
-          const errJson = JSON.parse(errText);
-          if (errJson && errJson.message) {
-            errDetails = errJson.message;
-          } else {
-            errDetails = errText.substring(0, 100);
-          }
-        } catch { }
-
-        if (response.status === 500) {
-          throw new Error("N8N unavailable or internal server error (500) inside n8n workflow execution node.");
-        } else if (response.status === 404) {
-          throw new Error("Backend unavailable - endpoint not found (404).");
-        } else {
-          throw new Error(errDetails);
-        }
+        throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
       }
 
       const text = await response.text();
-      let responseData: any = null;
+      if (!text?.trim()) {
+        throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
+      }
+
+      let responseData: unknown;
       try {
         responseData = JSON.parse(text);
       } catch {
-        responseData = text;
+        throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
+      }
+
+      const parsed = parseN8nResponse(responseData);
+      if (!isValidN8nPayload(parsed)) {
+        console.error("n8n returned 200 but payload was empty or unrecognized:", responseData);
+        throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
       }
 
       setN8nResponse(responseData);
 
-      // Step 1 Complete -> Transition to Step 2: Skills Extraction
-      setPipelineStatus({
-        step: "extracting",
-        progress: 50,
-        details: "Extracting professional skill tags from document structure...",
-        isFallback: false,
-      });
-      await delay(1200);
+      if (parsed.jobs.length) setJobsList(parsed.jobs);
+      if (parsed.internships.length) setInternshipsList(parsed.internships);
+      if (parsed.analysis.skills?.length) {
+        setSkillsList(parsed.analysis.skills);
+      }
 
-      // Extract skills or values if returned in typical n8n schema
-      let extractedSkills = ["React", "CSS", "TypeScript", "Tailwind"];
-      let nameOverride = "";
+      const payload = flattenN8nPayload(responseData);
+      if (payload.name || payload.fullName) {
+        setProfileForm((prev) => ({
+          ...prev,
+          fullName: String(payload.name || payload.fullName),
+        }));
+      }
 
-      if (responseData && typeof responseData === "object") {
-        if (responseData.success) {
-          console.log("n8n success confirmation parsed successfully!");
-          const parsedJobs = [...(responseData.jobs || []), ...(responseData.internships || [])];
-          if (parsedJobs.length > 0) {
-            const mappedJobs = parsedJobs.map((job: any, index: number) => ({
-              id: job.id || `n8n-job-${index}-${Date.now()}`,
-              title: job.title || job.role || "Matched Opportunity",
-              company: job.company || "Partner",
-              location: job.location || "Remote",
-              salary: job.salary || "$95k/yr",
-              score: job.score || job.matchScore || 85,
-              type: job.type || "Fullstack",
-              matchedSkills: Array.isArray(job.skills) ? job.skills : ["React", "TypeScript"],
-              missingSkills: Array.isArray(job.missingSkills) ? job.missingSkills : []
-            }));
-            setJobsList(mappedJobs);
-            console.log("Matched lists mapped successfully from n8n response:", mappedJobs);
-          }
-        }
-
-        const skillsVal = responseData.skills || responseData.extracted_skills || responseData.skillsList;
-        if (Array.isArray(skillsVal)) {
-          extractedSkills = skillsVal;
-        } else if (typeof skillsVal === "string") {
-          extractedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
-        }
-
-        if (responseData.name || responseData.fullName) {
-          nameOverride = responseData.name || responseData.fullName;
+      if (!isMockMode && user) {
+        const saved = await saveAnalysis(parsed.analysis);
+        if (!saved) {
+          throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
         }
       }
 
       const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
       setResumeFile({ name: file.name, size: `${sizeInMB} MB` });
-      setChecklist((prev) => ({ ...prev, resume: true }));
-      setSkillsList(extractedSkills);
 
-      if (nameOverride) {
-        setProfileForm((prev) => ({ ...prev, fullName: nameOverride }));
-      }
-
-      // Step 2 Complete -> Transition to Step 3: ATS Evaluation
-      setPipelineStatus({
-        step: "scoring",
-        progress: 75,
-        details: "Auditing document ATS scoring compatibility matrices...",
-        isFallback: false,
-      });
-      await delay(1200);
-
-      setChecklist((prev) => ({ ...prev, atsAudit: true }));
-
-      // Step 3 Complete -> Transition to Step 4: Finding matched jobs
-      setPipelineStatus({
-        step: "matching",
-        progress: 90,
-        details: "Scanning live databases for internship & entry-level roles...",
-        isFallback: false,
-      });
-
-      // Scrape matched jobs
-      setIsScraping(true);
-      await delay(1200);
-
-      setJobsList((prev) => [
-        {
-          id: `job-scraped-${Date.now()}`,
-          title: "UI Engineer (Entry Level)",
-          company: "Apple Inc.",
-          location: "Cupertino, CA",
-          salary: "$125k/yr",
-          score: 91,
-          type: "Frontend",
-          matchedSkills: ["React", "CSS", "TypeScript"],
-          missingSkills: ["SwiftUI"],
-        },
-        {
-          id: `job-scraped-2-${Date.now()}`,
-          title: "Fullstack Developer Intern",
-          company: "Amazon",
-          location: "Seattle, WA",
-          salary: "$50/hr",
-          score: 82,
-          type: "Fullstack",
-          matchedSkills: ["React", "SQL"],
-          missingSkills: ["AWS", "Node.js"],
-        },
-        ...prev,
-      ]);
-      setChecklist((prev) => ({ ...prev, matchJobs: true }));
-      setIsScraping(false);
-
-      // Step 4 Complete
       setPipelineStatus({
         step: "complete",
         progress: 100,
-        details: "Parsing completed. Successfully matched Apple & Amazon entry-level roles!",
+        details: `Done — ${parsed.jobs.length} jobs and ${parsed.internships.length} internships matched.`,
         isFallback: false,
       });
 
-      toast.success("Resume parsed successfully!", {
+      console.log("n8n analysis applied:", {
+        jobs: parsed.jobs.length,
+        internships: parsed.internships.length,
+        skills: parsed.analysis.skills?.length,
+        ats: parsed.analysis.atsScore?.score,
+      });
+
+      toast.success("Analysis complete", {
         id: uploadToastId,
-        description: "Successfully processed by Railway n8n nodes.",
+        description: `${parsed.jobs.length} jobs · ${parsed.internships.length} internships from n8n.`,
       });
-
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      console.error("Upload error:", err);
-
-      let cleanErrorMessage = err.message || "Resume upload failed. Please try again.";
-      if (err.name === "AbortError") {
-        cleanErrorMessage = "Network timeout. n8n workflow took too long to respond (>25s).";
-      }
-
-      toast.info("Activating local simulator fallback...", {
-        id: uploadToastId,
-        description: "Executing offline fallback pipeline so you are not blocked.",
-      });
-
-      // Sequential progress simulation for fallbacks!
-      // Step 1: Complete analyzing via local fallback
-      setPipelineStatus({
-        step: "extracting",
-        progress: 40,
-        details: `Live webhook connection failed. Activating local AI simulator...`,
-        isFallback: true,
-      });
-      await delay(1500);
-
-      // Step 2: Extraction
-      setPipelineStatus({
-        step: "extracting",
-        progress: 55,
-        details: "Local Simulation: Parsing tech stack tags...",
-        isFallback: true,
-      });
-      setSkillsList(["React", "CSS", "TypeScript", "Tailwind"]);
-      await delay(1200);
-
-      // Step 3: ATS Score Evaluation
-      setPipelineStatus({
-        step: "scoring",
-        progress: 75,
-        details: "Local Simulation: Auditing compatibility ranking...",
-        isFallback: true,
-      });
-      const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
-      setResumeFile({ name: file.name, size: `${sizeInMB} MB` });
-      setChecklist((prev) => ({ ...prev, resume: true, atsAudit: true }));
-      setN8nResponse({
-        error: `Webhook returned error: ${cleanErrorMessage}`,
-        message: "Failed to process via live Railway webhook. Local simulation fallback activated.",
-        fallbackActive: true,
-        schemaSuggestion: "Please verify your n8n workflow active status, input parameter mappings, or database connection inside Railway logs."
-      });
-      await delay(1200);
-
-      // Step 4: Finding Jobs
-      setPipelineStatus({
-        step: "matching",
-        progress: 90,
-        details: "Local Simulation: Scanning live matching entries...",
-        isFallback: true,
-      });
-      setIsScraping(true);
-      await delay(1200);
-
-      setJobsList((prev) => [
-        {
-          id: `job-scraped-${Date.now()}`,
-          title: "UI Engineer (Entry Level)",
-          company: "Apple Inc.",
-          location: "Cupertino, CA",
-          salary: "$125k/yr",
-          score: 91,
-          type: "Frontend",
-          matchedSkills: ["React", "CSS", "TypeScript"],
-          missingSkills: ["SwiftUI"],
-        },
-        {
-          id: `job-scraped-2-${Date.now()}`,
-          title: "Fullstack Developer Intern",
-          company: "Amazon",
-          location: "Seattle, WA",
-          salary: "$50/hr",
-          score: 82,
-          type: "Fullstack",
-          matchedSkills: ["React", "SQL"],
-          missingSkills: ["AWS", "Node.js"],
-        },
-        ...prev,
-      ]);
-      setChecklist((prev) => ({ ...prev, matchJobs: true }));
-      setIsScraping(false);
-
-      // Finalize
-      setPipelineStatus({
-        step: "complete",
-        progress: 100,
-        details: "Local simulation completed. Matched Apple & Amazon entry-level roles successfully!",
-        isFallback: true,
-      });
-
-      toast.error(cleanErrorMessage, {
-        description: `Live webhook failed. Local simulation fallback activated so you are not blocked.`,
-      });
+    } catch (err: unknown) {
+      console.error("n8n upload error:", err);
+      failAnalysis(true);
     }
   };
 
-  // Handle checklist step completes
-  const handleStepToggle = (stepKey: "resume" | "atsAudit" | "matchJobs" | "applyRoles") => {
-    setChecklist((prev) => {
-      const next = { ...prev, [stepKey]: !prev[stepKey] };
-
-      if (stepKey === "resume") {
-        if (resumeFile) {
-          setResumeFile(null);
-          setSkillsList([]);
-          toast.info("Resume removed");
-          return { ...prev, resume: false, atsAudit: false };
-        } else {
-          fileInputRef.current?.click();
-          return prev; // Toggling is handled by handleFileChange
-        }
-      } else if (stepKey === "atsAudit") {
-        if (next.atsAudit) {
-          if (!resumeFile) {
-            toast.warning("Upload a resume first!", {
-              description: "Please upload a Word or Excel resume before running the audit.",
-            });
-            return prev;
-          }
-          toast.success("ATS Audit Evaluation Completed!", {
-            description: "Your compatibility score is 85%",
-          });
-        } else {
-          toast.info("ATS Audit evaluation reset");
-        }
-      } else if (stepKey === "matchJobs") {
-        if (next.matchJobs) {
-          toast.success("Matched Jobs successfully!", {
-            description: "Generated 24 entry-level recommendations",
-          });
-        } else {
-          toast.info("Matched jobs index reset");
-        }
-      } else if (stepKey === "applyRoles") {
-        if (next.applyRoles) {
-          toast.success("Applications sync completed!", {
-            description: "Syncing mock active trackers",
-          });
-        } else {
-          toast.info("Active trackers sync removed");
-        }
-      }
-
-      return next;
-    });
-  };
-
   // Computed values that animate from 0
-  const jobsMatchedCount = jobsList.length;
+  const jobsMatchedCount = jobsList.length + internshipsList.length;
   const savedJobsCount = savedJobsList.length;
   const appsSentCount = applications.length;
 
   // Profile Score calculation
   const hasBaseInfo = profileForm.fullName.length > 0 && skillsList.length >= 3;
   const profileScore =
-    (hasBaseInfo ? 20 : 0) +
-    (checklist.resume ? 20 : 0) +
-    (checklist.atsAudit ? 20 : 0) +
-    (checklist.matchJobs ? 20 : 0) +
-    (checklist.applyRoles ? 20 : 0);
+    (hasBaseInfo ? 25 : 0) +
+    (resumeFile ? 25 : 0) +
+    (savedJobsCount > 0 ? 25 : 0) +
+    (appsSentCount > 0 ? 25 : 0);
 
-  const atsScore = checklist.atsAudit ? 85 : 0;
-
-  // Checklist tooltip hover state
-  const [hoveredStep, setHoveredStep] = useState<number | null>(null);
-
-  // Quick Action Modal states
-  const [activeModal, setActiveModal] = useState<"roadmap" | "interview" | "salary" | "linkedin" | "coverletter" | null>(null);
+  const atsScoreDisplay = analysis?.atsScore?.score ?? 0;
+  const hasAnyMatches = jobsList.length > 0 || internshipsList.length > 0;
 
   const handleScrapeTrigger = () => {
     setIsScraping(true);
-    toast.loading("Scraping live entry-level matching feeds...", { duration: 1800 });
+    toast.loading("Refreshing matching roles from database...", { duration: 1000 });
     setTimeout(() => {
-      setJobsList((prev) => [
-        {
-          id: `job-scraped-${Date.now()}`,
-          title: "UI Engineer (Entry Level)",
-          company: "Apple Inc.",
-          location: "Cupertino, CA",
-          salary: "$125k/yr",
-          score: 91,
-          type: "Frontend",
-          matchedSkills: ["React", "CSS", "TypeScript"],
-          missingSkills: ["SwiftUI"],
-        },
-        {
-          id: `job-scraped-2-${Date.now()}`,
-          title: "Fullstack Developer Intern",
-          company: "Amazon",
-          location: "Seattle, WA",
-          salary: "$50/hr",
-          score: 82,
-          type: "Fullstack",
-          matchedSkills: ["React", "SQL"],
-          missingSkills: ["AWS", "Node.js"],
-        },
-        ...prev,
-      ]);
-      setChecklist((prev) => ({ ...prev, matchJobs: true }));
       setIsScraping(false);
-      toast.success("Scrape completed! Added Apple and Amazon entry-level roles.");
-    }, 1800);
+      toast.success("Sync completed!");
+    }, 1000);
   };
 
   // Applications Tracker Modal states
@@ -1001,82 +841,139 @@ function DashboardLayout() {
   };
 
   // Add tracked application manually
-  const handleAddApplication = (e: React.FormEvent) => {
+  const handleAddApplication = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!ensureTrackerPersistence()) return;
     if (!newAppForm.company || !newAppForm.role) {
       toast.error("Required fields empty", { description: "Please provide Company and Role." });
       return;
     }
 
-    const app = {
-      id: `app-custom-${Date.now()}`,
-      company: newAppForm.company,
-      role: newAppForm.role,
-      status: newAppForm.status,
-      salary: newAppForm.salary || "$90k/yr",
-      date: newAppForm.date || "2026-06-01",
-      notes: newAppForm.notes,
-    };
+    try {
+      const created = await insertApplication(user.id, {
+        company: newAppForm.company,
+        role: newAppForm.role,
+        status: newAppForm.status,
+        salary: newAppForm.salary || "$90k/yr",
+        date: newAppForm.date || new Date().toISOString().split("T")[0],
+        notes: newAppForm.notes,
+      });
 
-    setApplications((prev) => [app, ...prev]);
-    setChecklist((prev) => ({ ...prev, applyRoles: true }));
-    setShowTrackModal(false);
-    setNewAppForm({
-      company: "",
-      role: "",
-      status: "Applied",
-      salary: "",
-      date: "2026-06-01",
-      notes: "",
-    });
-    toast.success(`Successfully tracked application at ${app.company}!`);
-  };
+      if (!created) {
+        toast.info("This application is already tracked.");
+        return;
+      }
 
-  const handleDeleteApplication = (id: string) => {
-    setApplications((prev) => prev.filter((app) => app.id !== id));
-    toast.info("Application deleted");
-  };
-
-  const handleUpdateAppStatus = (id: string, status: string) => {
-    setApplications((prev) =>
-      prev.map((app) => (app.id === id ? { ...app, status } : app))
-    );
-    toast.success(`Updated application status stage to ${status}`);
-  };
-
-  // Job matching actions
-  const handleSaveJobToggle = (job: any) => {
-    const isSaved = savedJobsList.some((j) => j.id === job.id);
-    if (isSaved) {
-      setSavedJobsList((prev) => prev.filter((j) => j.id !== job.id));
-      toast.info(`Removed ${job.title} from Saved Jobs Vault`);
-    } else {
-      setSavedJobsList((prev) => [...prev, job]);
-      setChecklist((prev) => ({ ...prev, matchJobs: true }));
-      toast.success(`Saved ${job.title} to Saved Jobs Vault!`);
+      setApplications((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+      setShowTrackModal(false);
+      setNewAppForm({
+        company: "",
+        role: "",
+        status: "Applied",
+        salary: "",
+        date: new Date().toISOString().split("T")[0],
+        notes: "",
+      });
+      toast.success(`Successfully tracked application at ${created.company}!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not save application", {
+        description: "Check your Supabase connection and try again.",
+      });
     }
   };
 
-  const handleQuickApplyJob = (job: any) => {
-    const isApplied = applications.some((app) => app.company === job.company && app.role === job.title);
+  const handleDeleteApplication = async (id: string) => {
+    if (!ensureTrackerPersistence()) return;
+    try {
+      await deleteApplicationFromStore(user.id, id);
+      setApplications((prev) => prev.filter((app) => app.id !== id));
+      toast.info("Application deleted");
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not delete application");
+    }
+  };
+
+  const handleUpdateAppStatus = async (id: string, status: string) => {
+    if (!ensureTrackerPersistence()) return;
+    try {
+      await updateApplicationStatus(user.id, id, status);
+      setApplications((prev) =>
+        prev.map((app) => (app.id === id ? { ...app, status } : app)),
+      );
+      toast.success(`Updated application status to ${status}`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not update status");
+    }
+  };
+
+  const handleSaveJobToggle = async (job: any) => {
+    if (!ensureTrackerPersistence()) return;
+
+    const normalized = normalizeJob(job);
+    const existing = savedJobsList.find((j) => j.id === normalized.id);
+
+    try {
+      if (existing) {
+        await removeSavedJobFromStore(user.id, existing);
+        setSavedJobsList((prev) => prev.filter((j) => j.id !== normalized.id));
+        toast.info(`Removed ${normalized.title} from Saved Jobs`);
+        return;
+      }
+
+      const saved = await saveJobToStore(user.id, normalized);
+      if (!saved) {
+        toast.error("Could not save job. Try again.");
+        return;
+      }
+      setSavedJobsList((prev) => [saved, ...prev.filter((j) => j.id !== saved.id)]);
+      toast.success(`Saved ${saved.title} to Saved Jobs!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not save job", {
+        description: "Check your Supabase connection and try again.",
+      });
+    }
+  };
+
+  const handleQuickApplyJob = async (job: any) => {
+    if (!ensureTrackerPersistence()) return;
+
+    const normalized = normalizeJob(job);
+    const isApplied = applications.some(
+      (app) =>
+        app.company.toLowerCase() === normalized.company.toLowerCase() &&
+        app.role.toLowerCase() === normalized.title.toLowerCase(),
+    );
     if (isApplied) {
-      toast.info(`You have already tracked an application at ${job.company}.`);
+      toast.info(`You have already tracked an application at ${normalized.company}.`);
       return;
     }
 
-    const app = {
-      id: `app-scraped-${Date.now()}`,
-      company: job.company,
-      role: job.title,
-      status: "Applied",
-      salary: job.salary,
-      date: "2026-06-01",
-      notes: `Applied quickly via matches. Compatibility Rank: ${job.score}%`,
-    };
+    try {
+      const created = await insertApplication(user.id, {
+        company: normalized.company,
+        role: normalized.title,
+        status: "Applied",
+        salary: String(normalized.salary),
+        date: new Date().toISOString().split("T")[0],
+        notes: `Quick apply from Job Matcher. Match score: ${normalized.score}%`,
+        location: normalized.location,
+      });
 
-    setApplications((prev) => [app, ...prev]);
-    setChecklist((prev) => ({ ...prev, applyRoles: true }));
-    toast.success(`Quick Applied! Tracked in Applications Tracker.`);
+      if (!created) {
+        toast.info(`Application at ${normalized.company} is already tracked.`);
+        return;
+      }
+
+      setApplications((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+      toast.success("Application tracked successfully!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not track application");
+    }
   };
 
   // Navigation Items Mapping
@@ -1147,15 +1044,15 @@ function DashboardLayout() {
             <div className="relative w-10 h-10 select-none">
               <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6] animate-rotate-avatar-ring border border-transparent" />
               <div className="absolute inset-[2.5px] rounded-full bg-[#07050f] flex items-center justify-center text-sm font-black text-[#8b5cf6]">
-                {profileForm.fullName ? profileForm.fullName.charAt(0) : "R"}
+                {displayName.charAt(0).toUpperCase()}
               </div>
             </div>
             <div className="min-w-0 flex-1">
               <h5 className="text-xs font-bold text-slate-200 truncate select-none">
-                {profileForm.fullName || "Ramya"}
+                {displayName}
               </h5>
               <p className="text-[10px] text-slate-500 truncate select-none">
-                {profileForm.email || "ramya@example.com"}
+                {displayEmail}
               </p>
             </div>
           </div>
@@ -1199,24 +1096,17 @@ function DashboardLayout() {
           {/* TAB 1: DASHBOARD VIEW */}
           {activeTab === "dashboard" && (
             <div className="space-y-8 animate-in fade-in duration-300">
-              {/* Welcome back hero section with integrated Status Checklist */}
-              <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-[#15122e] via-[#0f0d20] to-[#07050f] p-6 md:p-8 border border-[#8b5cf6]/25 shadow-[0_20px_45px_rgba(139,92,246,0.15)] flex flex-col lg:flex-row items-stretch justify-between gap-8 select-none">
-                {/* Hero floating gold + amber dots overlay */}
+              {/* Welcome hero — checklist removed; use Career Tools pages */}
+              <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-[#15122e] via-[#0f0d20] to-[#07050f] p-6 md:p-10 border border-[#8b5cf6]/25 shadow-[0_20px_45px_rgba(139,92,246,0.15)] select-none">
                 <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-45">
-                  <span className="absolute w-2 h-2 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "8%", top: "25%", animationDelay: "0s" }} />
+                  <span className="absolute w-2 h-2 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "8%", top: "25%" }} />
                   <span className="absolute w-3.5 h-3.5 bg-[#f59e0b] rounded-full animate-float" style={{ left: "28%", top: "72%", animationDelay: "1.2s" }} />
-                  <span className="absolute w-1.5 h-1.5 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "54%", top: "42%", animationDelay: "2.1s" }} />
-                  <span className="absolute w-2 h-2 bg-[#3b82f6] rounded-full animate-float" style={{ left: "78%", top: "18%", animationDelay: "1.5s" }} />
-                  <span className="absolute w-2.5 h-2.5 bg-[#f59e0b] rounded-full animate-float" style={{ left: "84%", top: "78%", animationDelay: "0.5s" }} />
                 </div>
-
-                <div className="space-y-4 max-w-xl text-center lg:text-left z-10 flex-1 flex flex-col justify-center">
-                  <h1 className="text-2.5xl md:text-4xl font-extrabold text-[#f8fafc] leading-tight shadow-sm" style={{ textShadow: "0 2px 10px rgba(139,92,246,0.2)" }}>
-                    Welcome Back, {profileForm.fullName || "Ramya"}! 👋
+                <div className="relative z-10 space-y-4 max-w-2xl">
+                  <h1 className="text-2.5xl md:text-4xl font-extrabold text-[#f8fafc] leading-tight">
+                    Welcome Back, {displayName}! 👋
                   </h1>
-
-                  {/* Typewriter phrases container */}
-                  <div className="h-8 flex items-center justify-center lg:justify-start">
+                  <div className="h-8 flex items-center">
                     <TypewriterEffect
                       phrases={[
                         "Your dream role is closer than you think",
@@ -1225,238 +1115,25 @@ function DashboardLayout() {
                       ]}
                     />
                   </div>
-
-                  <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2">
+                  <p className="text-sm text-slate-400 font-medium max-w-lg">
+                    Open any Career Tool below for ATS, resume review, salary insights, and more — all powered by your Supabase-stored analysis.
+                  </p>
+                  <div className="flex flex-wrap gap-3 pt-2">
                     <button
                       onClick={() => setActiveTab("matcher")}
-                      className="h-12 px-6 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-sm hover-shimmer shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 flex items-center justify-center gap-1.5 cursor-pointer"
+                      className="h-12 px-6 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-sm hover-shimmer shadow-lg active:scale-95 transition-all"
                     >
                       Start Job Matching →
                     </button>
                     <button
-                      onClick={() => setActiveTab("profile")}
-                      className="h-12 px-6 rounded-xl bg-transparent text-[#f8fafc] font-bold text-sm border border-[#8b5cf6]/30 hover:bg-[#8b5cf6]/10 hover:border-[#8b5cf6]/50 hover:scale-105 active:scale-95 transition-all duration-300 backdrop-blur-sm shadow-[0_0_15px_rgba(139,92,246,0.1)] cursor-pointer"
+                      onClick={() => setActiveTab("tool-ats")}
+                      className="h-12 px-6 rounded-xl border border-[#8b5cf6]/30 text-[#f8fafc] font-bold text-sm hover:bg-[#8b5cf6]/10 active:scale-95 transition-all"
                     >
-                      Complete Profile
+                      ATS Score Check
                     </button>
                   </div>
                 </div>
-
-                {/* Checklist & Status Panel Nested Inside Welcome Card */}
-                <div className="w-full lg:w-[28%] shrink-0 bg-slate-950/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 flex flex-col justify-between space-y-4 z-10">
-                  <div className="space-y-3.5">
-                    <div className="flex justify-between items-center select-none gap-2">
-                      <h3 className="text-xs font-black text-slate-100 flex items-center gap-1">
-                        📋 Status Checklist
-                      </h3>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[9px] font-bold text-slate-400">Resume:</span>
-                        {resumeFile ? (
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20 flex items-center gap-0.5">
-                            <span className="w-1 h-1 rounded-full bg-[#10b981]" />
-                            Uploaded
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20 flex items-center gap-0.5">
-                            <span className="w-1 h-1 rounded-full bg-[#ef4444] animate-pulse" />
-                            Missing
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Step List */}
-                    <div className="space-y-2">
-                      {[
-                        { key: "resume", label: "Upload Resume", tooltip: "Upload PDF (.pdf), Word (.doc, .docx) or Excel (.xls, .xlsx) resume under 2MB" },
-                        { key: "atsAudit", label: "Run ATS Audit", tooltip: "Evaluate resume keyword compatibility matches" },
-                        { key: "matchJobs", label: "Match Jobs", tooltip: "Query mock jobs index vs your profile skills" },
-                        { key: "applyRoles", label: "Apply to Roles", tooltip: "Log tracked application statuses in list" },
-                      ].map((step, idx) => {
-                        const isDone = (checklist as any)[step.key];
-                        return (
-                          <div
-                            key={step.key}
-                            onClick={() => handleStepToggle(step.key as any)}
-                            onMouseEnter={() => setHoveredStep(idx)}
-                            onMouseLeave={() => setHoveredStep(null)}
-                            className="relative flex items-center justify-between p-2.5 rounded-xl border border-white/5 bg-slate-950/20 hover:bg-white/[0.02] hover:border-white/10 transition-all duration-300 cursor-pointer group"
-                            style={{ minHeight: "40px" }}
-                          >
-                            <div className="flex items-center gap-2">
-                              {isDone ? (
-                                <div className="w-4 h-4 rounded-md border border-[#8b5cf6] bg-[#8b5cf6]/20 flex items-center justify-center">
-                                  <Check className="w-3.5 h-3.5 text-[#8b5cf6]" />
-                                </div>
-                              ) : (
-                                <div className="w-4 h-4 rounded-md border border-white/20 bg-slate-900 flex items-center justify-center relative">
-                                  <span className="w-1 h-1 rounded-full bg-[#f59e0b] animate-pulse-glow" />
-                                </div>
-                              )}
-                              <span className={`text-[11px] font-semibold select-none transition-colors ${isDone ? "text-slate-400 line-through" : "text-slate-200"}`}>
-                                {step.label}
-                              </span>
-                            </div>
-
-                            {/* Floating tooltip */}
-                            {hoveredStep === idx && (
-                              <div className="absolute right-12 top-0 z-20 bg-slate-900/95 backdrop-blur text-white text-[9px] font-bold px-2 py-1 rounded-lg shadow-xl border border-white/10 animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap">
-                                Click to complete step →
-                              </div>
-                            )}
-
-                            <span className="text-[9px] text-slate-500 font-bold group-hover:text-[#8b5cf6] transition-colors">
-                              {isDone ? "Done" : "Pending"}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {pipelineStatus.step !== "idle" && (
-                    <div className="p-4 rounded-xl bg-slate-900 border border-white/5 space-y-4 animate-in fade-in duration-300 relative overflow-hidden">
-                      {/* Premium glowing indicators */}
-                      <div className="absolute top-0 right-0 w-24 h-24 bg-[#8b5cf6]/5 rounded-full blur-2xl pointer-events-none" />
-
-                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-2.5">
-                        <div className="flex items-center gap-2 select-none">
-                          <Sparkles className="w-3.5 h-3.5 text-[#8b5cf6] animate-pulse" />
-                          <span className="font-extrabold text-[#f8fafc] uppercase tracking-wider text-[9px]">
-                            AI Parsing Pipeline
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 select-none">
-                          <div className="w-20 h-1.5 bg-slate-950 rounded-full overflow-hidden border border-white/5">
-                            <div
-                              className="h-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#10b981] transition-all duration-500 ease-out"
-                              style={{ width: `${pipelineStatus.progress}%` }}
-                            />
-                          </div>
-                          <span className="text-[9px] font-black text-[#8b5cf6]">
-                            {pipelineStatus.progress}%
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Stepper items list */}
-                      <div className="space-y-2 select-none">
-                        <PipelineStepCard
-                          stepNum={1}
-                          title="Analyzing Resume"
-                          description="Validating dimensions, checking file types, packaging FormData payload."
-                          status={
-                            pipelineStatus.step === "analyzing"
-                              ? "active"
-                              : pipelineStatus.step === "failed" && pipelineStatus.progress < 25
-                                ? "failed"
-                                : pipelineStatus.step !== "idle"
-                                  ? "success"
-                                  : "pending"
-                          }
-                        />
-                        <PipelineStepCard
-                          stepNum={2}
-                          title="Skills Extraction"
-                          description="Extracting engineering tags, programming languages, framework keywords."
-                          status={
-                            pipelineStatus.step === "extracting"
-                              ? "active"
-                              : pipelineStatus.step === "analyzing" || pipelineStatus.step === "idle"
-                                ? "pending"
-                                : "success"
-                          }
-                        />
-                        <PipelineStepCard
-                          stepNum={3}
-                          title="ATS Scorer Evaluation"
-                          description="Auditing document ATS scoring compatibility matrices & ranking guidelines."
-                          status={
-                            pipelineStatus.step === "scoring"
-                              ? "active"
-                              : pipelineStatus.step === "matching" || pipelineStatus.step === "complete"
-                                ? "success"
-                                : "pending"
-                          }
-                        />
-                        <PipelineStepCard
-                          stepNum={4}
-                          title="Finding Matched Jobs"
-                          description="Scanning live entry-level database indices for matching opportunities."
-                          status={
-                            pipelineStatus.step === "matching"
-                              ? "active"
-                              : pipelineStatus.step === "complete"
-                                ? "success"
-                                : "pending"
-                          }
-                        />
-                      </div>
-
-                      {/* Pipeline Status Details bar */}
-                      {pipelineStatus.details && (
-                        <div className="flex items-center justify-between text-[8px] font-bold text-slate-400 bg-slate-950/30 px-2.5 py-1.5 rounded-lg border border-white/5 select-none">
-                          <span className="flex items-center gap-1">
-                            {pipelineStatus.step !== "complete" && pipelineStatus.step !== "failed" && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] animate-ping inline-block" />
-                            )}
-                            {pipelineStatus.details}
-                          </span>
-                          {pipelineStatus.isFallback && (
-                            <span className="text-amber-400 font-extrabold tracking-wider uppercase bg-amber-400/10 px-1 py-0.5 rounded border border-amber-400/20 text-[7px] shrink-0">
-                              Fallback Active
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Collapsible raw n8n debug output inside details disclosure */}
-                      {n8nResponse && (
-                        <div className="border-t border-white/[0.04] pt-2">
-                          <details className="group">
-                            <summary className="text-[8px] font-bold text-slate-500 hover:text-slate-350 cursor-pointer list-none flex items-center justify-between select-none">
-                              <span>🔍 Debug: View Raw Webhook Response</span>
-                              <span className="transition-transform group-open:rotate-180">▼</span>
-                            </summary>
-                            <pre className="mt-1.5 p-2 rounded bg-black/40 border border-white/5 font-mono text-[8px] text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-24 custom-scrollbar select-text">
-                              {typeof n8nResponse === "object"
-                                ? JSON.stringify(n8nResponse, null, 2)
-                                : String(n8nResponse)}
-                            </pre>
-                          </details>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between pt-3 border-t border-white/[0.04] gap-4">
-                    <div className="flex items-center gap-2.5">
-                      <CircularProgress
-                        value={atsScore}
-                        size={52}
-                        strokeWidth={5}
-                        primaryColor={getAtsColor(atsScore)}
-                        secondaryColor="rgba(255, 255, 255, 0.04)"
-                        fontSize="0.8rem"
-                      />
-                      <div className="flex flex-col select-none">
-                        <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest leading-none">
-                          ATS Score
-                        </span>
-                        <span className="text-[10px] text-slate-300 font-bold mt-0.5">
-                          Rating
-                        </span>
-                      </div>
-                    </div>
-
-                    <span className="text-[9px] text-slate-500 font-bold select-none flex items-center gap-1 shrink-0">
-                      <Clock className="w-3.5 h-3.5 text-slate-500" />
-                      Last sync: 2h ago
-                    </span>
-                  </div>
-                </div>
               </div>
-
 
               {/* Stats Cards grid: snap scroll row on mobile */}
               <div className="flex overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid md:grid-cols-2 lg:grid-cols-4 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
@@ -1518,103 +1195,14 @@ function DashboardLayout() {
 
                 {/* 2x2 scroll on mobile, 3x3 on desktop */}
                 <div className="grid grid-rows-2 grid-flow-col overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid-rows-none md:grid-flow-row md:grid-cols-3 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
-                  {[
-                    {
-                      id: "ats",
-                      title: "ATS Audit Analyzer",
-                      subtitle: "Optimize keyword resume scores",
-                      emoji: "📊",
-                      gradient: "from-[#4c1d95] to-[#7c3aed]",
-                      action: () => {
-                        handleStepToggle("atsAudit");
-                      },
-                    },
-                    {
-                      id: "resume",
-                      title: "Resume Parser",
-                      subtitle: "Extract skill tags from Word/Excel",
-                      emoji: "📄",
-                      gradient: "from-[#1e3a8a] to-[#3b82f6]",
-                      action: () => {
-                        handleStepToggle("resume");
-                      },
-                    },
-                    {
-                      id: "gap",
-                      title: "Skill Gap Advisor",
-                      subtitle: "Find missing tech profile tools",
-                      emoji: "🧩",
-                      gradient: "from-[#311042] to-[#6366f1]",
-                      action: () => {
-                        setActiveTab("profile");
-                        toast.info("Scroll down on the profile page to add missing skill tags!");
-                      },
-                    },
-                    {
-                      id: "roadmap",
-                      title: "Career Path Roadmap",
-                      subtitle: "Interactive developer milestones",
-                      emoji: "🗺️",
-                      gradient: "from-[#064e3b] to-[#10b981]",
-                      action: () => setActiveModal("roadmap"),
-                    },
-                    {
-                      id: "interview",
-                      title: "Interview Simulator",
-                      subtitle: "Simulated tech questionnaire prep",
-                      emoji: "🎙️",
-                      gradient: "from-[#7c2d12] to-[#fb923c]",
-                      action: () => setActiveModal("interview"),
-                    },
-                    {
-                      id: "salary",
-                      title: "Salary Insights Tracker",
-                      subtitle: "Evaluate market junior rates",
-                      emoji: "💰",
-                      gradient: "from-[#115e59] to-[#14b8a6]",
-                      action: () => setActiveModal("salary"),
-                    },
-                    {
-                      id: "linkedin",
-                      title: "LinkedIn Optimizer",
-                      subtitle: "Enhance keyword recruiter search",
-                      emoji: "💼",
-                      gradient: "from-[#1e3a8a] to-[#2563eb]",
-                      action: () => setActiveModal("linkedin"),
-                    },
-                    {
-                      id: "coverletter",
-                      title: "Cover Letter Builder",
-                      subtitle: "AI formatted custom letters",
-                      emoji: "✍️",
-                      gradient: "from-[#831843] to-[#ec4899]",
-                      action: () => setActiveModal("coverletter"),
-                    },
-                    {
-                      id: "jobs",
-                      title: "Scrape Jobs Feed",
-                      subtitle: "Query live online listing scrapes",
-                      emoji: "🎯",
-                      gradient: "from-[#14532d] to-[#22c55e]",
-                      action: () => {
-                        setActiveTab("matcher");
-                        if (resumeFile) {
-                          handleScrapeTrigger();
-                        } else {
-                          setTimeout(() => {
-                            fileInputRef.current?.click();
-                          }, 100);
-                        }
-                      },
-                    },
-                  ].map((card) => (
+                  {COACH_TOOLS.map((card) => (
                     <QuickActionCard
                       key={card.id}
                       title={card.title}
                       subtitle={card.subtitle}
                       emoji={card.emoji}
                       gradientClass={card.gradient}
-                      onClick={card.action}
+                      onClick={() => setActiveTab(card.id)}
                     />
                   ))}
                 </div>
@@ -1831,15 +1419,33 @@ function DashboardLayout() {
                     </div>
                   )}
 
+                  {pipelineStatus.step === "failed" && (
+                    <div className="space-y-3">
+                      <p className="text-sm font-bold text-[#ef4444] text-center">
+                        {SERVICE_UNAVAILABLE_MESSAGE}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPipelineStatus({ step: "idle", progress: 0, isFallback: false });
+                        }}
+                        className="w-full h-11 rounded-xl bg-[#ef4444]/15 border border-[#ef4444]/30 text-[#ef4444] font-bold text-xs hover:bg-[#ef4444]/25 transition-colors"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  )}
+
                   {/* Reset button shown upon completion */}
                   {pipelineStatus.step === "complete" && (
                     <button
                       onClick={() => {
                         setPipelineStatus({ step: "idle", progress: 0, isFallback: false });
                         setResumeFile(null);
-                        setChecklist((prev) => ({ ...prev, resume: false, atsAudit: false, matchJobs: false }));
                         setJobsList([]);
+                        setInternshipsList([]);
                         setN8nResponse(null);
+                        refreshAnalysis();
                       }}
                       className="w-full h-10 rounded-xl bg-white/5 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all duration-300 cursor-pointer select-none"
                     >
@@ -1895,6 +1501,26 @@ function DashboardLayout() {
                 </div>
               </div>
 
+              {/* Jobs vs internships from latest n8n run */}
+              {hasAnyMatches && (
+                <div className="flex gap-2 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => setMatcherView("jobs")}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${matcherView === "jobs" ? "bg-[#8b5cf6] text-white" : "bg-white/5 text-slate-400"}`}
+                  >
+                    Jobs ({jobsList.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMatcherView("internships")}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${matcherView === "internships" ? "bg-[#10b981] text-white" : "bg-white/5 text-slate-400"}`}
+                  >
+                    Internships ({internshipsList.length})
+                  </button>
+                </div>
+              )}
+
               {/* Matched list */}
               {isScraping ? (
                 <div className="py-20 flex flex-col items-center justify-center space-y-4 select-none">
@@ -1909,7 +1535,7 @@ function DashboardLayout() {
                   <h4 className="text-sm font-bold text-white">Aggregating live API feeds...</h4>
                   <p className="text-xs text-slate-500">Connecting via n8n scrape worker nodes</p>
                 </div>
-              ) : jobsList.length === 0 ? (
+              ) : !hasAnyMatches ? (
                 <div className="py-12 flex flex-col items-center justify-center space-y-3 border border-white/5 rounded-2xl bg-slate-950/20 select-none animate-in fade-in max-w-xl mx-auto">
                   <div className="w-12 h-12 rounded-full bg-slate-900 border border-white/5 flex items-center justify-center text-slate-500">
                     <Briefcase className="w-5 h-5" />
@@ -1923,7 +1549,7 @@ function DashboardLayout() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {jobsList
+                  {(matcherView === "jobs" ? jobsList : internshipsList)
                     .filter((job) => {
                       const matchesKeyword =
                         job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1932,7 +1558,8 @@ function DashboardLayout() {
                       return matchesKeyword && matchesType;
                     })
                     .map((job) => {
-                      const isSaved = savedJobsList.some((j) => j.id === job.id);
+                      const jobKey = normalizeJob(job).id;
+                      const isSaved = savedJobsList.some((j) => j.id === jobKey);
                       return (
                         <div
                           key={job.id}
@@ -1967,11 +1594,11 @@ function DashboardLayout() {
                             </div>
                           </div>
 
-                          {/* Skill verification */}
+                          {/* Match reasons from n8n */}
                           <div className="space-y-1.5 select-none">
-                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Extracted Validation</p>
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Why this match</p>
                             <div className="flex flex-wrap gap-1.5">
-                              {job.matchedSkills.map((s: string, idx: number) => (
+                              {(job.matchReasons?.length ? job.matchReasons : job.matchedSkills).map((s: string, idx: number) => (
                                 <span
                                   key={idx}
                                   className="px-2 py-0.5 rounded bg-[#8b5cf6]/15 border border-[#8b5cf6]/25 text-[9px] font-extrabold text-[#3b82f6]"
@@ -2277,6 +1904,24 @@ function DashboardLayout() {
           )}
 
           {/* TAB 5: PROFILE REDESIGN */}
+
+          {COACH_TOOLS.map((tool) =>
+            activeTab === tool.id ? (
+              <CoachToolPageView
+                key={tool.id}
+                tool={tool}
+                onBack={() => setActiveTab("dashboard")}
+                onOpenMatcher={() => setActiveTab("matcher")}
+                displayName={displayName}
+                profileEmail={displayEmail}
+                resumeName={profile?.resume_name}
+                parsedSkills={skillsList}
+                jobs={jobsList}
+                internships={internshipsList}
+              />
+            ) : null,
+          )}
+
           {activeTab === "profile" && (
             <div className="space-y-6 animate-in fade-in duration-300">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
@@ -2287,16 +1932,16 @@ function DashboardLayout() {
                   <div className="relative w-28 h-28 select-none">
                     <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6] animate-rotate-avatar-ring border border-transparent" />
                     <div className="absolute inset-[3.5px] rounded-full bg-[#0f0d20] flex items-center justify-center text-3xl font-black text-[#8b5cf6]">
-                      {profileForm.fullName ? profileForm.fullName.charAt(0) : "R"}
+                      {displayName.charAt(0).toUpperCase()}
                     </div>
                   </div>
 
                   <div className="text-center space-y-1">
                     <h3 className="font-extrabold text-white text-lg tracking-tight select-none">
-                      {profileForm.fullName || "Ramya"}
+                      {displayName}
                     </h3>
                     <p className="text-xs text-slate-400 select-none">
-                      {profileForm.email || "ramya@example.com"}
+                      {displayEmail}
                     </p>
                   </div>
 
@@ -2320,10 +1965,10 @@ function DashboardLayout() {
                     {/* ATS Evaluator chip */}
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-400 font-bold select-none">ATS Evaluator:</span>
-                      {checklist.atsAudit ? (
+                      {atsScoreDisplay > 0 ? (
                         <div className="flex items-center gap-1.5 bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20 px-2.5 py-1 rounded-full text-[10px] font-semibold">
-                          <CircularProgress value={atsScore} size={16} strokeWidth={2.5} showText={false} primaryColor="#10b981" />
-                          <span>Audited: {atsScore}%</span>
+                          <CircularProgress value={atsScoreDisplay} size={16} strokeWidth={2.5} showText={false} primaryColor="#10b981" />
+                          <span>Score: {atsScoreDisplay}%</span>
                         </div>
                       ) : (
                         <span className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-semibold">
@@ -2537,18 +2182,20 @@ function DashboardLayout() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-bold text-slate-200">Diagnostics & Sandbox resets</h4>
                   <p className="text-xs text-slate-400">
-                    Wipe local storage caches to reset checklist completions, empty applications status boards and counters back to absolute 0.
+                    Clear your Supabase saved jobs and applications for this account, and reset local profile/resume state.
                   </p>
 
                   <div className="flex flex-wrap gap-3 pt-1">
                     <button
-                      onClick={() => {
-                        setChecklist({
-                          resume: false,
-                          atsAudit: false,
-                          matchJobs: false,
-                          applyRoles: false,
-                        });
+                      onClick={async () => {
+                        if (user && !isMockMode) {
+                          try {
+                            await clearAllTrackerData(user.id);
+                          } catch (err) {
+                            console.error(err);
+                            toast.error("Could not clear data from Supabase");
+                          }
+                        }
                         setResumeFile(null);
                         setSavedJobsList([]);
                         setApplications([]);
@@ -2561,7 +2208,7 @@ function DashboardLayout() {
                           targetCityState: "",
                         });
                         setSkillsList([]);
-                        toast.success("All checklist steps, stats, and profile fields reset to zero!");
+                        toast.success("Tracker data and profile fields reset.");
                       }}
                       className="h-12 px-4 bg-[#ef4444]/15 border border-[#ef4444]/30 hover:bg-[#ef4444]/20 text-[#ef4444] text-xs font-bold rounded-xl transition-colors cursor-pointer"
                     >
@@ -2570,27 +2217,21 @@ function DashboardLayout() {
 
                     <button
                       onClick={() => {
-                        setChecklist({
-                          resume: true,
-                          atsAudit: true,
-                          matchJobs: true,
-                          applyRoles: true,
-                        });
-                        setResumeFile({ name: "ramya_resume_2026.docx", size: "1.2 MB" });
+                        setResumeFile({ name: "demo_resume.docx", size: "1.2 MB" });
                         setProfileForm({
-                          fullName: "Ramya",
-                          email: "ramya@example.com",
+                          fullName: displayName,
+                          email: displayEmail,
                           experienceLevel: "Freshman/Student",
                           preferredJobType: "Internship",
                           targetJobTitle: "Frontend Developer",
                           targetCityState: "Remote",
                         });
                         setSkillsList(["React", "CSS", "TypeScript", "Tailwind"]);
-                        toast.success("All checklist steps marked as completed.");
+                        toast.success("Demo profile and resume loaded.");
                       }}
                       className="h-12 px-4 bg-[#10b981]/15 border border-[#10b981]/30 hover:bg-[#10b981]/20 text-[#10b981] text-xs font-bold rounded-xl transition-colors cursor-pointer"
                     >
-                      Complete All Checklist Steps
+                      Load Demo Profile
                     </button>
                   </div>
                 </div>
@@ -2634,220 +2275,6 @@ function DashboardLayout() {
           );
         })}
       </nav>
-
-      {/* QUICK ACTIONS MODALS DIALOG OVERLAYS */}
-      {/* 1. Roadmap Modal */}
-      {activeModal === "roadmap" && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
-            <button
-              onClick={() => setActiveModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-[#10b981] select-none">
-              <Award className="h-5 w-5" />
-              <h3 className="font-extrabold text-white text-base">Frontend Dev Path Roadmap</h3>
-            </div>
-
-            <div className="space-y-4 select-none pt-2">
-              {[
-                { step: "Milestone 1", title: "HTML, CSS, Web Layouts", done: true, desc: "Verify basic box model layouts, flexbox, grid, and vanilla responsive media queries." },
-                { step: "Milestone 2", title: "React, State & Lifecycle Hooks", done: true, desc: "Master useState, useEffect, context provider wrappers, and state lifts." },
-                { step: "Milestone 3", title: "TypeScript & Data Types", done: false, desc: "Integrate static type checking, type interfaces, unions, generics and strict configurations." },
-                { step: "Milestone 4", title: "API Integration & NextJS SSR", done: false, desc: "Manage server-side rendering, routing boundaries, state mutations and Tanstack query caches." },
-              ].map((ms, i) => (
-                <div key={i} className="flex gap-3 relative">
-                  {i < 3 && <div className="absolute left-3.5 top-7 bottom-0 w-[2px] bg-white/5" />}
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 border z-10 text-xs font-bold ${ms.done ? "bg-[#10b981]/20 border-[#10b981] text-[#10b981]" : "bg-slate-900 border-white/10 text-slate-500"
-                    }`}>
-                    {ms.done ? "✓" : i + 1}
-                  </div>
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] font-bold text-[#8b5cf6] uppercase tracking-wide">{ms.step}</span>
-                    <h5 className="font-bold text-white text-xs">{ms.title}</h5>
-                    <p className="text-[10px] text-[#94a3b8] leading-normal">{ms.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. Interview Prep Modal */}
-      {activeModal === "interview" && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
-            <button
-              onClick={() => setActiveModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-[#f59e0b] select-none">
-              <FileSignature className="h-5 w-5" />
-              <h3 className="font-extrabold text-white text-base">Interview Prep Simulator</h3>
-            </div>
-
-            <div className="space-y-4 select-none pt-2">
-              <div className="p-4 bg-white/5 border border-white/5 rounded-xl space-y-2">
-                <span className="text-[10px] font-bold text-[#f59e0b] uppercase tracking-widest">Question of the Day:</span>
-                <h5 className="font-bold text-white text-xs leading-normal">
-                  What is the difference between client-side state management (useState/Context) and server cache state management (React Query)?
-                </h5>
-              </div>
-
-              <div className="space-y-2 text-[11px] text-[#94a3b8] leading-relaxed">
-                <p>
-                  <strong>Client-Side State:</strong> Holds UI/layout states, form data, and active toggles locally within application memory.
-                </p>
-                <p>
-                  <strong>Server Cache State:</strong> Handles remote endpoints synchronization, client caching, request deduplication, invalidations and background stale fetches.
-                </p>
-              </div>
-
-              <button
-                onClick={() => {
-                  toast.success("Mock answer submitted!", { description: "Evaluating semantic match score..." });
-                  setActiveModal(null);
-                }}
-                className="w-full h-12 rounded-xl bg-[#8b5cf6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
-              >
-                Submit Mock Answer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 3. Salary Insights Modal */}
-      {activeModal === "salary" && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
-            <button
-              onClick={() => text => setActiveModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-[#8b5cf6] select-none">
-              <DollarSign className="h-5 w-5" />
-              <h3 className="font-extrabold text-white text-base">Salary Insights Index</h3>
-            </div>
-
-            <div className="space-y-4 select-none pt-2">
-              <p className="text-xs text-slate-400">Regional entry-level developer pay structures matched vs tech stack requirements.</p>
-
-              <div className="space-y-3">
-                {[
-                  { role: "React Developer Intern", rate: "$35 - $50 / hr", location: "Remote / US-based" },
-                  { role: "Junior Software Engineer", rate: "$85k - $110k / yr", location: "Hybrid / SF Bay Area" },
-                  { role: "NodeJS Backend Developer", rate: "$90k - $115k / yr", location: "Onsite / Seattle" },
-                ].map((s, idx) => (
-                  <div key={idx} className="p-3 bg-white/5 border border-white/5 rounded-xl flex justify-between items-center text-xs">
-                    <div>
-                      <h5 className="font-bold text-white">{s.role}</h5>
-                      <span className="text-[10px] text-slate-500">{s.location}</span>
-                    </div>
-                    <span className="font-black text-[#8b5cf6]">{s.rate}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. LinkedIn Optimizer Modal */}
-      {activeModal === "linkedin" && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
-            <button
-              onClick={() => setActiveModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-[#3b82f6] select-none">
-              <Briefcase className="h-5 w-5" />
-              <h3 className="font-extrabold text-white text-base">LinkedIn Profile Keyword Tuner</h3>
-            </div>
-
-            <div className="space-y-4 select-none pt-2">
-              <p className="text-xs text-slate-400">AI suggested keywords to inject into your LinkedIn headline and summary to attract recruiter bots.</p>
-
-              <div className="p-4 bg-white/5 border border-white/5 rounded-xl space-y-3">
-                <span className="text-[10px] font-bold text-[#8b5cf6] uppercase tracking-widest">Recommended Headline Template:</span>
-                <p className="text-xs text-white leading-relaxed font-semibold">
-                  "Frontend Engineer Intern | React & TypeScript Developer | Passionate about building highly interactive web apps"
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Keywords to target:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {["React.js", "TypeScript", "Vite", "Supabase", "REST API", "Git", "Tailwind CSS"].map((kw, i) => (
-                    <span key={i} className="px-2 py-0.5 rounded bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 text-[10px] font-bold text-[#3b82f6]">
-                      {kw}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 5. Cover Letter Builder Modal */}
-      {activeModal === "coverletter" && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
-            <button
-              onClick={() => setActiveModal(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="flex items-center gap-2 text-[#ef4444] select-none">
-              <FileText className="h-5 w-5" />
-              <h3 className="font-extrabold text-white text-base">Cover Letter Generator</h3>
-            </div>
-
-            <div className="space-y-4 select-none pt-2">
-              <p className="text-xs text-slate-400">Generate a custom cover letter tailormade for Frontend roles.</p>
-
-              <div className="p-4 bg-white/5 border border-white/5 rounded-xl h-44 overflow-y-auto custom-scrollbar space-y-2">
-                <p className="text-[10px] text-slate-300 leading-relaxed">
-                  Dear Hiring Committee,
-                </p>
-                <p className="text-[10px] text-slate-300 leading-relaxed">
-                  I am writing to express my strong interest in the Frontend Engineer Intern position. As a developer skilled in React, CSS and TypeScript, I specialize in crafting interactive interfaces and responsive layouts.
-                </p>
-                <p className="text-[10px] text-slate-300 leading-relaxed">
-                  Your team's focus on building high-performance products matches my commitment to coding clean, modular systems. Thank you for your time and consideration.
-                </p>
-              </div>
-
-              <button
-                onClick={() => {
-                  toast.success("Cover letter copied to clipboard!", { description: "AI template saved." });
-                  setActiveModal(null);
-                }}
-                className="w-full h-12 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
-              >
-                Copy to Clipboard
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* TRACK NEW JOB FORM MODAL */}
       {showTrackModal && (

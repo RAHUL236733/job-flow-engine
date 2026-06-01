@@ -179,6 +179,32 @@ export function formatAnalysisContent(raw: unknown, fallbackTitle: string): stri
 }
 
 export function formatAtsResponse(score: number, feedbackRaw: unknown): string {
+  const parsed = (tryParseJson(feedbackRaw) ?? feedbackRaw) as Record<string, unknown> | null;
+  if (parsed && typeof parsed === "object") {
+    const displayScore =
+      typeof parsed.score === "number" ? parsed.score : score;
+    const missing = extractStringList(parsed.missingKeywords ?? parsed.missing_keywords);
+    const recs = extractStringList(parsed.recommendations ?? parsed.nextSteps);
+    const lines = [
+      `# 🚀 ATS Score Analysis`,
+      "",
+      `## 📊 Overall ATS Score`,
+      `**${displayScore}% Match**`,
+      "",
+    ];
+    if (missing.length) {
+      lines.push(`## ⚠️ Missing Keywords`, "", bulletList(missing), "");
+    }
+    if (recs.length) {
+      lines.push(`## 🎯 Recommendations`, "", numberedList(recs), "");
+    }
+    const extra = formatAnalysisContent(parsed, "🚀 ATS Score Analysis");
+    if (extra && !extra.includes("Missing Keywords")) {
+      lines.push("---", "", extra.replace(/^# [^\n]+\n\n/, ""));
+    }
+    return lines.join("\n").trim();
+  }
+
   const body = formatAnalysisContent(
     feedbackRaw || { score, improvements: [], strengths: [] },
     "🚀 ATS Score Analysis",
@@ -191,9 +217,9 @@ export function formatResumeReview(content: unknown, resumeName?: string): strin
   if (!content) {
     return `# 📄 Resume Review\n\nNo resume review data found. Please upload a resume first.`;
   }
-  const parsed = tryParseJson(content) as any;
+  const parsed = (tryParseJson(content) ?? content) as Record<string, unknown> | null;
   if (parsed && typeof parsed === "object") {
-    const summary = parsed.summary || parsed.summaryText || parsed.professionalSummary || parsed.content || "";
+    const summary = String(parsed.summary || parsed.summaryText || parsed.professionalSummary || parsed.content || "");
     const strengths = extractStringList(parsed.strengths || parsed.strongPoints || []);
     const improvements = extractStringList(parsed.improvements || parsed.areasForImprovement || parsed.weaknesses || []);
     const actions = extractStringList(parsed.recommendedActions || parsed.recommended_actions || parsed.nextSteps || []);
@@ -208,7 +234,7 @@ export function formatSkillGap(content: unknown, skillsFallback: string[]): stri
     const strengths = bulletList(skillsFallback.map((s) => `**${s}**`));
     return `# 🧠 Skill Gap Analysis\n\n## ✅ Current Skills\n\n${strengths}\n\n## ⚠️ Missing Skills\n\n• Docker\n• Cloud Platforms\n• System Design\n\n## 🔥 Priority Skills\n\n1. Docker\n2. AWS\n3. System Design\n\n## 📚 Learning Suggestions\n\n• Take online certification courses\n• Build hands-on projects`;
   }
-  const parsed = tryParseJson(content) as any;
+  const parsed = (tryParseJson(content) ?? content) as Record<string, unknown> | null;
   if (parsed && typeof parsed === "object") {
     const current = extractStringList(parsed.currentSkills || parsed.current_skills || parsed.skills || skillsFallback || []);
     const missing = extractStringList(parsed.missingSkills || parsed.missing_skills || parsed.missing || []);
@@ -224,9 +250,15 @@ export function formatSalary(content: unknown): string {
   if (!content) {
     return `# 💰 Salary Insights\n\n## 🎓 Entry Level Salary\n\n₹6.5 LPA - ₹10 LPA\n\n## 📈 Growth Potential\n\nExcellent growth potential up to ₹18 LPA - ₹30 LPA within 3 years.\n\n## 🚀 Career Outlook\n\nHighly positive outlook for skilled modern engineers in the tech market.`;
   }
-  const parsed = tryParseJson(content) as any;
+  const parsed = (tryParseJson(content) ?? content) as Record<string, unknown> | null;
   if (parsed && typeof parsed === "object") {
-    const entry = parsed.entryLevel || parsed.entry_level || parsed.entryLevelSalary || parsed.entry || "₹6.5 LPA - ₹12 LPA";
+    const entry =
+      parsed.entryLevelRange ||
+      parsed.entryLevel ||
+      parsed.entry_level ||
+      parsed.entryLevelSalary ||
+      parsed.entry ||
+      "₹6.5 LPA - ₹12 LPA";
     const growth = parsed.growthPotential || parsed.growth_potential || parsed.growth || "Excellent";
     const outlook = parsed.careerOutlook || parsed.career_outlook || parsed.outlook || "Positive outlook";
     
@@ -254,10 +286,18 @@ export function formatLinkedIn(content: unknown): string {
   if (!content) {
     return `# 🔗 LinkedIn Optimization\n\n## 🏷 Recommended Headlines\n\n• Software Engineer | React · Python · FastAPI | Building modern web apps\n• Frontend Developer | JavaScript · TypeScript · UI/UX Design\n\n## 📝 About Section\n\nI am a passionate software engineer specializing in building high-scale web systems. Let's connect!\n\n## ✅ Profile Improvements\n\n• Complete all experience bullets with impact metrics\n• Feature top portfolio repositories\n• Add 3-5 endorsements for core tech skills`;
   }
-  const parsed = tryParseJson(content) as any;
+  const parsed = (tryParseJson(content) ?? content) as Record<string, unknown> | null;
   if (parsed && typeof parsed === "object") {
-    const headlines = extractStringList(parsed.recommendedHeadlines || parsed.recommended_headlines || parsed.headlines || []);
-    const about = parsed.aboutSection || parsed.about_section || parsed.about || "";
+    const headlines = extractStringList(
+      parsed.headlineSuggestions ||
+        parsed.recommendedHeadlines ||
+        parsed.recommended_headlines ||
+        parsed.headlines ||
+        [],
+    );
+    const about =
+      extractStringList(parsed.aboutSectionSuggestions || []).join("\n\n") ||
+      String(parsed.aboutSection || parsed.about_section || parsed.about || "");
     const improvements = extractStringList(parsed.profileImprovements || parsed.profile_improvements || parsed.improvements || []);
     
     return `# 🔗 LinkedIn Optimization\n\n## 🏷 Recommended Headlines\n\n${headlines.length ? bulletList(headlines) : "• Software Engineer | Focus Stack"}\n\n## 📝 About Section\n\n${about ? about : "Include top achievements and core skills."}\n\n## ✅ Profile Improvements\n\n${improvements.length ? bulletList(improvements) : "• Add details to experience sections"}`;
@@ -287,7 +327,7 @@ export function formatInterview(content: unknown): string {
   if (!content) {
     return `# 🎤 Interview Practice\n\n## Technical Questions\n\n1. Explain REST APIs and statelessness.\n2. SQL vs NoSQL database use cases.\n3. How to optimize web performance.\n\n## HR Questions\n\n1. Tell me about yourself.\n2. Explain a challenging situation and how you handled it.\n3. What are your long-term career goals?\n\n## Preparation Tips\n\n• Practice the STAR method.\n• Write clean, documented code.\n• Do mock interviews weekly.`;
   }
-  const parsed = tryParseJson(content) as any;
+  const parsed = (tryParseJson(content) ?? content) as Record<string, unknown> | null;
   if (parsed && typeof parsed === "object") {
     const technical = extractStringList(parsed.technicalQuestions || parsed.technical_questions || parsed.technical || []);
     const hr = extractStringList(parsed.hrQuestions || parsed.hr_questions || parsed.hr || []);
