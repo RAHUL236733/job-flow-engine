@@ -1,3494 +1,2998 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { supabase } from "@/lib/supabase";
-import { toast } from "sonner";
-import {
-  Upload,
-  FileText,
-  X,
-  Sparkles,
-  Loader2,
-  ExternalLink,
-  RotateCcw,
-  Briefcase,
-  CheckCircle2,
-  MapPin,
-  Bookmark,
-  BookmarkCheck,
-  User as UserIcon,
-  LogOut,
-  Sun,
-  Moon,
-  Trash2,
-  ChevronRight,
-  Info,
-  Menu,
-  FileSpreadsheet,
-  AlertCircle,
-  Layers,
-  MessageSquare,
-  Send,
-  Download,
-  Plus,
-  Zap,
-  BarChart2,
-  Clock,
-  Search,
-  Award,
-} from "lucide-react";
+import { useTheme } from "@/hooks/use-theme";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { useTheme } from "@/hooks/use-theme";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+  Sparkles,
+  LayoutDashboard,
+  Zap,
+  Bookmark,
+  FileText,
+  Clock,
+  User,
+  Settings as SettingsIcon,
+  LogOut,
+  Sun,
+  Moon,
+  Upload,
+  Search,
+  Plus,
+  Trash2,
+  CheckCircle,
+  Briefcase,
+  MapPin,
+  Calendar,
+  DollarSign,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  TrendingUp,
+  Award,
+  BookOpen,
+  HelpCircle,
+  X,
+  PlusCircle,
+  Check,
+  Loader2
+} from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
-  component: Dashboard,
+  component: DashboardLayout,
 });
 
-const DEFAULT_N8N_URL = "https://poojitharamya7125.app.n8n.cloud/webhook-test/upload-resume";
+// Generic Ripple Card Component for premium click ripples with warm gold overlays
+interface RippleCardProps extends React.HTMLAttributes<HTMLDivElement> {
+  children: React.ReactNode;
+  className?: string;
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+}
+
+function RippleCard({ children, className = "", onClick, ...props }: RippleCardProps) {
+  const [ripples, setRipples] = useState<{ x: number; y: number; id: number }[]>([]);
+  const nextId = useRef(0);
+
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const newRipple = { x, y, id: nextId.current++ };
+    setRipples((prev) => [...prev, newRipple]);
 
-// --- GLOBAL TYPES ---
-type Job = {
-  title: string;
-  company: string;
-  location: string;
-  skills: string;
-  url: string;
-  score: string;
-  description?: string;
-  type?: string;
-  experience?: string;
-  saved_at?: string;
-  matchReasons?: string[];
-};
-
-type ActiveTab = "dashboard" | "matcher" | "assistant" | "saved" | "applications" | "profile";
-type AppStatus = "Applied" | "Interviewing" | "Offer" | "Rejected";
-
-type Application = {
-  id: string;
-  company: string;
-  role: string;
-  status: AppStatus;
-  applied_at: string;
-  location?: string;
-};
-
-type UserStats = {
-  user_id: string;
-  jobs_matched: number;
-  applications_sent: number;
-  saved_jobs: number;
-  profile_score: number;
-  ats_match_rank: number;
-  resume_uploaded: boolean;
-};
-
-type ChatMessage = {
-  id: string;
-  sender: "user" | "ai";
-  text: string;
-  timestamp: string;
-  isRoadmap?: boolean;
-  roadmapData?: { phase: string; title: string; skills: string[]; timeline?: string }[];
-  isJobRecs?: boolean;
-  jobRecsData?: { title: string; company: string; score: number; matchReason: string }[];
-  isInterviewMode?: boolean;
-  interviewScore?: number;
-  interviewStrengths?: string[];
-  interviewImprovements?: string[];
-};
-
-const STEPS = [
-  { label: "Extracting skills from your resume...", at: 0 },
-  { label: "Spawning live AI web scrapers across job boards...", at: 3000 },
-  { label: "Analyzing company listings against your profile...", at: 7000 },
-  { label: "Finalizing your custom recommendation dashboard...", at: 11000 },
-];
-
-const ACCEPTED_EXTS = [".pdf", ".doc", ".docx"];
-
-const normalizeResumeData = (raw: any): any => {
-  if (!raw) return { skills: [], roles: [], experience: "", keywords: [] };
-  let parsed = raw;
-  if (typeof raw === "string") {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      console.warn("Failed to parse resumeData string:", e);
-      return { skills: [], roles: [], experience: "", keywords: [] };
-    }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { skills: [], roles: [], experience: "", keywords: [] };
-  }
-
-  const getArr = (val: any): string[] => {
-    if (!val) return [];
-    if (Array.isArray(val)) return val.map(String);
-    if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
-    return [];
-  };
-
-  const getStr = (val: any): string => {
-    if (!val) return "";
-    if (Array.isArray(val)) return val.join("\n");
-    if (typeof val === "object") return JSON.stringify(val);
-    return String(val);
-  };
-
-  return {
-    skills: getArr(parsed.skills || []),
-    roles: getArr(parsed.roles || parsed.targetRoles || []),
-    experience: getStr(parsed.experience || parsed.experienceProfile || parsed.workHistory || ""),
-    keywords: getArr(parsed.keywords || [])
-  };
-};
-
-const normalizeCareerAnalysis = (raw: any): any => {
-  if (!raw) {
-    return {
-      resumeReview: "",
-      atsScore: { score: 0, feedback: "" },
-      skillGapAnalysis: "",
-      salaryInsights: "",
-      careerRoadmap: "",
-      linkedinOptimization: "",
-      interviewPractice: "",
-      coverLetter: "",
-      keywords: []
-    };
-  }
-  let parsed = raw;
-  if (typeof raw === "string") {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      console.warn("Failed to parse careerAnalysis string:", e);
-      return {
-        resumeReview: "",
-        atsScore: { score: 0, feedback: "" },
-        skillGapAnalysis: "",
-        salaryInsights: "",
-        careerRoadmap: "",
-        linkedinOptimization: "",
-        interviewPractice: "",
-        coverLetter: "",
-        keywords: []
-      };
-    }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return {
-      resumeReview: "",
-      atsScore: { score: 0, feedback: "" },
-      skillGapAnalysis: "",
-      salaryInsights: "",
-      careerRoadmap: "",
-      linkedinOptimization: "",
-      interviewPractice: "",
-      coverLetter: "",
-      keywords: []
-    };
-  }
-
-  const getStr = (val: any): string => {
-    if (!val) return "";
-    if (Array.isArray(val)) return val.join("\n");
-    if (typeof val === "object") return JSON.stringify(val);
-    return String(val);
-  };
-
-  const getArr = (val: any): string[] => {
-    if (!val) return [];
-    if (Array.isArray(val)) return val.map(String);
-    if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
-    return [];
-  };
-
-  const atsScoreObj = parsed.atsScore || {};
-  let atsScoreScore = 0;
-  let atsScoreFeedback = "";
-
-  if (typeof atsScoreObj === "object" && atsScoreObj !== null) {
-    atsScoreScore = atsScoreObj.score !== undefined ? atsScoreObj.score : 0;
-    atsScoreFeedback = getStr(atsScoreObj.feedback);
-  } else if (typeof atsScoreObj === "number") {
-    atsScoreScore = atsScoreObj;
-  } else if (typeof atsScoreObj === "string") {
-    atsScoreScore = parseInt(atsScoreObj, 10) || 0;
-  }
-
-  return {
-    resumeReview: getStr(parsed.resumeReview || parsed.review),
-    atsScore: {
-      score: typeof atsScoreScore === "number" && !isNaN(atsScoreScore) ? atsScoreScore : 0,
-      feedback: atsScoreFeedback
-    },
-    skillGapAnalysis: getStr(parsed.skillGapAnalysis || parsed.skillGap || parsed.gaps),
-    salaryInsights: getStr(parsed.salaryInsights || parsed.salaries || parsed.salary),
-    careerRoadmap: getStr(parsed.careerRoadmap || parsed.roadmap || parsed.milestones),
-    linkedinOptimization: getStr(parsed.linkedinOptimization || parsed.linkedin || parsed.profileTips),
-    interviewPractice: getStr(parsed.interviewPractice || parsed.interviewQuestions || parsed.prep),
-    coverLetter: getStr(parsed.coverLetter || parsed.coverLetterTemplate || parsed.letter),
-    keywords: getArr(parsed.keywords || [])
-  };
-};
-
-function Dashboard() {
-  const { user, profile, isLoading: authLoading, signOut, updateProfile, isMockMode, incrementTrialsUsed } = useAuth();
-  const { theme, setTheme } = useTheme();
-  const navigate = useNavigate();
-  const trialsUsed = user?.user_metadata?.trials_used || 0;
-
-  const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [isSavingProfile, setIsSavingProfile] = useState(false);
-
-  // --- AI CAREER ASSISTANT STATE ---
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [isAssistantTyping, setIsAssistantTyping] = useState(false);
-  const [assistantMode, setAssistantMode] = useState<"chat" | "interview" | "roadmap" | "recommendation">("chat");
-  const [activeInterviewStep, setActiveInterviewStep] = useState(0);
-
-  const [chatSessions, setChatSessions] = useState<{ id: string; title: string; date: string }[]>(() => {
-    const saved = localStorage.getItem("ai_chat_sessions");
-    return saved ? JSON.parse(saved) : [{ id: "session-1", title: "General Career Coach", date: new Date().toLocaleDateString() }];
-  });
-
-  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    return chatSessions[0]?.id || "session-1";
-  });
-
-  useEffect(() => {
-    if (streamingIntervalRef.current) {
-      clearInterval(streamingIntervalRef.current);
-      streamingIntervalRef.current = null;
-    }
-    const savedMsgs = localStorage.getItem(`ai_chat_messages_${activeSessionId}`);
-    if (savedMsgs) {
-      setChatMessages(JSON.parse(savedMsgs));
-    } else {
-      setChatMessages([]);
-    }
-  }, [activeSessionId]);
-
-  const saveSessionMessages = (sessionId: string, msgs: ChatMessage[]) => {
-    setChatMessages(msgs);
-    localStorage.setItem(`ai_chat_messages_${sessionId}`, JSON.stringify(msgs));
-  };
-
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  const scrollToBottom = () => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [chatMessages, isAssistantTyping]);
-
-  // --- APPLICATIONS TRACKER STATE ---
-  const [applications, setApplications] = useState<Application[]>(() => {
-    const saved = localStorage.getItem("user_applications");
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [showAddAppModal, setShowAddAppModal] = useState(false);
-  const [newAppName, setNewAppName] = useState("");
-  const [newAppRole, setNewAppRole] = useState("");
-  const [newAppLocation, setNewAppLocation] = useState("");
-  const [newAppStatus, setNewAppStatus] = useState<AppStatus>("Applied");
-
-  const saveApplications = (apps: Application[]) => {
-    setApplications(apps);
-    localStorage.setItem("user_applications", JSON.stringify(apps));
-
-    if (user) {
-      setUserStats(prev => {
-        if (!prev) return prev;
-        const updatedStats = { ...prev, applications_sent: apps.length };
-        if (isMockMode) {
-          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-        } else {
-          supabase
-            .from("user_stats")
-            .update({ applications_sent: apps.length })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to sync applications count:", error);
-            });
-        }
-        return updatedStats;
-      });
-    }
-  };
-
-  const addApplication = (company: string, role: string, status: AppStatus, location?: string) => {
-    const newApp: Application = {
-      id: `app-${Date.now()}`,
-      company,
-      role,
-      status,
-      applied_at: new Date().toLocaleDateString(),
-      location: location || "Remote"
-    };
-    const updated = [newApp, ...applications];
-    saveApplications(updated);
-    toast.success("Job application tracked successfully!");
-  };
-
-  const updateApplicationStatus = (id: string, status: AppStatus) => {
-    const updated = applications.map(app => app.id === id ? { ...app, status } : app);
-    saveApplications(updated);
-    toast.success("Application status updated!");
-  };
-
-  const deleteApplication = (id: string) => {
-    const updated = applications.filter(app => app.id !== id);
-    saveApplications(updated);
-    toast.success("Application removed.");
-  };
-
-  // --- MATCHER & MOUNT STATES ---
-  const [matcherPhase, setMatcherPhase] = useState<"upload" | "loading" | "results">("upload");
-  const [file, setFile] = useState<File | null>(null);
-  const [dragOver, setDragOver] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [internships, setInternships] = useState<Job[]>([]);
-  const [resumeData, setResumeData] = useState<any>(normalizeResumeData(null));
-  const [careerAnalysis, setCareerAnalysis] = useState<any>(normalizeCareerAnalysis(null));
-  const [resultsSubTab, setResultsSubTab] = useState<"jobs" | "resume" | "career" | "tools">("jobs");
-  const [atsScore, setAtsScore] = useState<number>(0);
-  const [parsedSkills, setParsedSkills] = useState<string[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const streamingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const [savedJobs, setSavedJobs] = useState<Job[]>([]);
-  const [savedJobsLoading, setSavedJobsLoading] = useState(false);
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
-
-  // --- USER STATISTICS STATE ---
-  const [userStats, setUserStats] = useState<UserStats | null>(null);
-  const [userStatsLoading, setUserStatsLoading] = useState(false);
-  const initialLoadsRef = useRef({ userStatsFetched: false });
-
-  const fetchUserStats = useCallback(async (force = false) => {
-    if (!user) return;
-    if (initialLoadsRef.current.userStatsFetched && !force) return;
-
-    setUserStatsLoading(true);
-
-    if (isMockMode) {
-      const cached = localStorage.getItem(`mock_user_stats_${user.id}`);
-      if (cached) {
-        setUserStats(JSON.parse(cached));
-      } else {
-        const defaultStats: UserStats = {
-          user_id: user.id,
-          jobs_matched: 0,
-          applications_sent: 0,
-          saved_jobs: 0,
-          profile_score: 0,
-          ats_match_rank: 0,
-          resume_uploaded: false,
-        };
-        setUserStats(defaultStats);
-        localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(defaultStats));
-      }
-      setUserStatsLoading(false);
-      initialLoadsRef.current.userStatsFetched = true;
-      return;
-    }
-
-    try {
-      let { data, error } = await supabase
-        .from("user_stats")
-        .select("*")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!data) {
-        const defaultStats = {
-          user_id: user.id,
-          jobs_matched: 0,
-          applications_sent: 0,
-          saved_jobs: 0,
-          profile_score: 0,
-          ats_match_rank: 0,
-          resume_uploaded: false,
-        };
-        const { data: inserted, error: insertError } = await supabase
-          .from("user_stats")
-          .insert(defaultStats)
-          .select("*")
-          .single();
-
-        if (insertError) {
-          console.error("Failed to auto-insert user stats row:", insertError);
-          data = defaultStats;
-        } else {
-          data = inserted;
-        }
-      }
-
-      setUserStats(data as UserStats);
-      initialLoadsRef.current.userStatsFetched = true;
-    } catch (err) {
-      console.error("Failed to fetch user stats:", err);
-    } finally {
-      setUserStatsLoading(false);
-    }
-  }, [user, isMockMode]);
-
-  const syncProfileScore = useCallback(async () => {
-    if (!user) return;
-
-    const hasName = !!(profile?.full_name?.trim());
-    const hasEmail = !!(user?.email?.trim());
-    const hasSkills = !!(profile?.skills?.trim() || parsedSkills.length > 0);
-
-    setUserStats(prev => {
-      if (!prev) return prev;
-      const hasResume = !!(prev.resume_uploaded || profile?.resume_name || profile?.resume_url);
-
-      let calculatedScore = 0;
-      if (hasName) calculatedScore += 20;
-      if (hasEmail) calculatedScore += 20;
-      if (hasResume) calculatedScore += 30;
-      if (hasSkills) calculatedScore += 30;
-
-      if (calculatedScore !== prev.profile_score) {
-        const updatedStats = { ...prev, profile_score: calculatedScore };
-
-        if (isMockMode) {
-          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-        } else {
-          supabase
-            .from("user_stats")
-            .update({ profile_score: calculatedScore })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to sync profile score:", error);
-            });
-        }
-        return updatedStats;
-      }
-      return prev;
-    });
-  }, [user, profile, parsedSkills, isMockMode]);
-
-  const clearTimers = useCallback(() => {
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
-  }, []);
-
-  useEffect(() => () => clearTimers(), [clearTimers]);
-
-  // --- DATABASE HELPERS ---
-  const loadCachedResumeResults = useCallback(async () => {
-    if (!user) return;
-
-    // Load comprehensive data from localStorage first
-    const extendedCached = localStorage.getItem(`ai_job_matcher_extended_results_${user.id}`);
-    if (extendedCached) {
-      try {
-        const parsed = JSON.parse(extendedCached);
-        const normResumeData = normalizeResumeData(parsed.resumeData);
-        const normCareerAnalysis = normalizeCareerAnalysis(parsed.careerAnalysis);
-        setJobs(parsed.jobs || []);
-        setInternships(parsed.internships || []);
-        setResumeData(normResumeData);
-        setCareerAnalysis(normCareerAnalysis);
-        setAtsScore(Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 0);
-        setParsedSkills(parsed.skills || normResumeData.skills || []);
-        setMatcherPhase("results");
-
-        setUserStats(prev => {
-          if (!prev) return prev;
-          const updatedStats = {
-            ...prev,
-            resume_uploaded: true,
-            ats_match_rank: Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 0,
-            jobs_matched: (parsed.jobs || []).length,
-          };
-          return updatedStats;
-        });
-        return;
-      } catch (err) {
-        console.error("Extended cache parsing error:", err);
-      }
-    }
-
-    if (profile?.skills) {
-      setParsedSkills(
-        profile.skills
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-      );
-      setAtsScore(profile.ats_score || 75);
-    }
-
-    if (isMockMode) {
-      const cached = localStorage.getItem(`mock_resume_results_${user.id}`);
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          const normResumeData = normalizeResumeData(parsed.resumeData);
-          const normCareerAnalysis = normalizeCareerAnalysis(parsed.careerAnalysis);
-          setJobs(parsed.jobs || []);
-          setInternships(parsed.internships || []);
-          setResumeData(normResumeData);
-          setCareerAnalysis(normCareerAnalysis);
-          setAtsScore(Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 75);
-          setParsedSkills(parsed.skills || normResumeData.skills || []);
-          setMatcherPhase("results");
-
-          setUserStats(prev => {
-            if (!prev) return prev;
-            const updatedStats = {
-              ...prev,
-              resume_uploaded: true,
-              ats_match_rank: Number(parsed.atsScore) || normCareerAnalysis.atsScore?.score || 75,
-              jobs_matched: (parsed.jobs || []).length,
-            };
-            localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-            return updatedStats;
-          });
-        } catch (err) {
-          console.error("Cache parsing error", err);
-        }
-      }
-      return;
-    }
-
-    try {
-      const queryHash = `resume-${user.id}`;
-      const { data } = await supabase
-        .from("cached_job_results")
-        .select("*")
-        .eq("query_hash", queryHash)
-        .single();
-
-      if (data && new Date(data.expires_at) > new Date()) {
-        const cachedJobs = data.jobs as Job[];
-        setJobs(cachedJobs);
-        setMatcherPhase("results");
-
-        // Retrieve latest ai_analysis from Supabase to populate resumeData & careerAnalysis states
-        supabase
-          .from("ai_analysis")
-          .select("*")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then(({ data: analysisData, error: analysisErr }) => {
-            if (!analysisErr && analysisData) {
-              const reconstructedCareerAnalysis = {
-                resumeReview: analysisData.resume_review?.content || "",
-                atsScore: {
-                  score: analysisData.ats_score?.score || 0,
-                  feedback: analysisData.ats_score?.feedback || ""
-                },
-                skillGapAnalysis: analysisData.skill_gap_analysis?.content || "",
-                salaryInsights: analysisData.salary_insights?.content || "",
-                careerRoadmap: analysisData.career_roadmap?.content || "",
-                linkedinOptimization: analysisData.linkedin_optimization?.content || "",
-                interviewPractice: analysisData.interview_practice?.content || "",
-                coverLetter: analysisData.cover_letter_generator?.content || "",
-                keywords: []
-              };
-              
-              setCareerAnalysis(reconstructedCareerAnalysis);
-              setAtsScore(reconstructedCareerAnalysis.atsScore.score || profile?.ats_score || 75);
-              
-              // Also reconstruct resumeData
-              const reconstructedResumeData = {
-                skills: profile?.skills ? profile.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : [],
-                roles: [],
-                experience: analysisData.resume_review?.content || "",
-                keywords: []
-              };
-              setResumeData(reconstructedResumeData);
-              if (reconstructedResumeData.skills.length > 0) {
-                setParsedSkills(reconstructedResumeData.skills);
-              }
-            }
-          });
-
-        setUserStats(prev => {
-          if (!prev) return prev;
-          const updatedStats = {
-            ...prev,
-            resume_uploaded: true,
-            ats_match_rank: profile?.ats_score || 75,
-            jobs_matched: cachedJobs.length,
-          };
-          supabase
-            .from("user_stats")
-            .update({
-              resume_uploaded: true,
-              ats_match_rank: profile?.ats_score || 75,
-              jobs_matched: cachedJobs.length,
-            })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to sync resume cached stats:", error);
-            });
-          return updatedStats;
-        });
-      }
-    } catch (err) {
-      console.error("No active cache found", err);
-    }
-  }, [user, profile, isMockMode]);
-
-  const cacheResumeResults = useCallback(
-    async (
-      jobsList: Job[],
-      score: number,
-      skillsList: string[],
-      internshipsList?: Job[],
-      rData?: any,
-      cAnalysis?: any
-    ) => {
-      if (!user) return;
-
-      const payload = {
-        jobs: jobsList,
-        atsScore: score,
-        skills: skillsList,
-        internships: internshipsList || [],
-        resumeData: rData || {},
-        careerAnalysis: cAnalysis || {}
-      };
-
-      // Store in localStorage for comprehensive retrieval on reload
-      localStorage.setItem(`ai_job_matcher_extended_results_${user.id}`, JSON.stringify(payload));
-
-      if (isMockMode) {
-        localStorage.setItem(`mock_resume_results_${user.id}`, JSON.stringify(payload));
-        return;
-      }
-
-      try {
-        const queryHash = `resume-${user.id}`;
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-        await supabase.from("cached_job_results").upsert(
-          {
-            query_hash: queryHash,
-            jobs: jobsList,
-            expires_at: expiresAt,
-            created_at: new Date().toISOString(),
-          },
-          { onConflict: "query_hash" }
-        );
-      } catch (err) {
-        console.error("Failed to cache jobs:", err);
-      }
-    },
-    [user, isMockMode],
-  );
-
-  const fetchSavedJobs = useCallback(async () => {
-    if (!user) return;
-    setSavedJobsLoading(true);
-
-    if (isMockMode) {
-      const mockSaved = localStorage.getItem(`mock_saved_jobs_${user.id}`);
-      const parsed = mockSaved ? JSON.parse(mockSaved) : [];
-      setSavedJobs(parsed);
-      setSavedJobsLoading(false);
-
-      setUserStats(prev => {
-        if (prev && prev.saved_jobs !== parsed.length) {
-          const updatedStats = { ...prev, saved_jobs: parsed.length };
-          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-          return updatedStats;
-        }
-        return prev;
-      });
-      return;
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from("saved_jobs")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("saved_at", { ascending: false });
-
-      if (error) throw error;
-      const parsed = (data as Job[]) || [];
-      setSavedJobs(parsed);
-
-      setUserStats(prev => {
-        if (prev && prev.saved_jobs !== parsed.length) {
-          const updated = { ...prev, saved_jobs: parsed.length };
-          supabase
-            .from("user_stats")
-            .update({ saved_jobs: parsed.length })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to sync saved jobs count:", error);
-            });
-          return updated;
-        }
-        return prev;
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error("Failed to fetch bookmarked jobs", { description: msg });
-    } finally {
-      setSavedJobsLoading(false);
-    }
-  }, [user, isMockMode]);
-
-  const toggleSaveJob = useCallback(
-    async (job: Job) => {
-      if (!user) {
-        toast.error("Please login to bookmark jobs");
-        return;
-      }
-
-      const isSaved = savedJobs.some((sj) => sj.url === job.url);
-
-      if (isMockMode) {
-        let updated: Job[] = [];
-        if (isSaved) {
-          updated = savedJobs.filter((sj) => sj.url !== job.url);
-          toast.success("Job bookmark removed");
-        } else {
-          updated = [...savedJobs, { ...job, saved_at: new Date().toISOString() }];
-          toast.success("Job bookmarked successfully!");
-        }
-        setSavedJobs(updated);
-        localStorage.setItem(`mock_saved_jobs_${user.id}`, JSON.stringify(updated));
-
-        setUserStats(prev => {
-          if (!prev) return prev;
-          const newSavedCount = Math.max(0, prev.saved_jobs + (isSaved ? -1 : 1));
-          const updatedStats = { ...prev, saved_jobs: newSavedCount };
-          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-          return updatedStats;
-        });
-        return;
-      }
-
-      try {
-        if (isSaved) {
-          const { error } = await supabase
-            .from("saved_jobs")
-            .delete()
-            .eq("user_id", user.id)
-            .eq("url", job.url);
-
-          if (error) throw error;
-          setSavedJobs(savedJobs.filter((sj) => sj.url !== job.url));
-          toast.success("Job bookmark removed");
-        } else {
-          const { error } = await supabase.from("saved_jobs").insert({
-            user_id: user.id,
-            title: job.title,
-            company: job.company,
-            location: job.location,
-            skills: job.skills,
-            url: job.url,
-            score: job.score,
-          });
-
-          if (error) throw error;
-          setSavedJobs([...savedJobs, job]);
-          toast.success("Job bookmarked successfully!");
-        }
-
-        setUserStats(prev => {
-          if (!prev) return prev;
-          const newSavedCount = Math.max(0, prev.saved_jobs + (isSaved ? -1 : 1));
-          const updated = { ...prev, saved_jobs: newSavedCount };
-          supabase
-            .from("user_stats")
-            .update({ saved_jobs: newSavedCount })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to sync saved job toggle stats:", error);
-            });
-          return updated;
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast.error("Bookmark toggle failed", { description: msg });
-      }
-    },
-    [user, savedJobs, isMockMode],
-  );
-
-  const handleFile = (f: File | null | undefined) => {
-    if (!f) return;
-    const name = f.name.toLowerCase();
-    const isValid = ACCEPTED_EXTS.some((ext) => name.endsWith(ext));
-    if (!isValid) {
-      toast.error("Unsupported file", { description: "Please upload a PDF, DOC, or DOCX file." });
-      return;
-    }
-    setFile(f);
-  };
-
-  const startLoadingSteps = () => {
-    setStepIndex(0);
-    STEPS.forEach((s, i) => {
-      if (i === 0) return;
-      const t = setTimeout(() => setStepIndex(i), s.at);
-      timersRef.current.push(t);
-    });
-  };
-
-  const handleResumeSubmit = async () => {
-    if (!file || !user) return;
-
-    if (trialsUsed >= 3) {
-      toast.error("Free trial limit reached", {
-        description: "You have used all 3 free trials. Please upgrade for unlimited resume matches.",
-      });
-      return;
-    }
-
-    setMatcherPhase("loading");
-    startLoadingSteps();
-
-    try {
-      const fd = new FormData();
-      fd.append("resume", file);
-
-      const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL || DEFAULT_N8N_URL;
-
-      const res = await fetch(webhookUrl, { method: "POST", body: fd });
-      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-      const data = await res.json();
-
-      // Debugging logs requested in requirement 9
-      console.log("Raw API Response:", data);
-      const apiData = Array.isArray(data) ? data[0] : data;
-      console.log("Normalized Data:", apiData);
-
-      let rawJobs: Job[] = apiData.topJobs || apiData.jobs || [];
-      let rawInternships: Job[] = apiData.internships || [];
-
-      // Map rawJobs to standard structure
-      if (Array.isArray(rawJobs)) {
-        rawJobs = rawJobs.map((item: any) => {
-          let actualItem = item;
-          if (item && typeof item === "object") {
-            if ("json" in item) actualItem = item.json;
-            else if ("body" in item) actualItem = item.body;
-          }
-          const reasons = Array.isArray(actualItem.matchReasons) ? actualItem.matchReasons : [];
-          return {
-            title: actualItem.title || "",
-            company: actualItem.company || "",
-            location: actualItem.location || "",
-            skills: actualItem.skills || "",
-            url: actualItem.applyLink || actualItem.url || "#",
-            score: actualItem.matchScore !== undefined
-              ? String(actualItem.matchScore)
-              : (actualItem.score !== undefined ? String(actualItem.score) : "75"),
-            description: actualItem.description || "",
-            matchReasons: reasons
-          };
-        });
-      } else {
-        rawJobs = [];
-      }
-
-      // Map rawInternships to standard structure
-      if (Array.isArray(rawInternships)) {
-        rawInternships = rawInternships.map((item: any) => {
-          let actualItem = item;
-          if (item && typeof item === "object") {
-            if ("json" in item) actualItem = item.json;
-            else if ("body" in item) actualItem = item.body;
-          }
-          const reasons = Array.isArray(actualItem.matchReasons) ? actualItem.matchReasons : [];
-          return {
-            title: actualItem.title || "",
-            company: actualItem.company || "",
-            location: actualItem.location || "",
-            skills: actualItem.skills || "",
-            url: actualItem.applyLink || actualItem.url || "#",
-            score: actualItem.matchScore !== undefined
-              ? String(actualItem.matchScore)
-              : (actualItem.score !== undefined ? String(actualItem.score) : "75"),
-            description: actualItem.description || "",
-            matchReasons: reasons
-          };
-        });
-      } else {
-        rawInternships = [];
-      }
-
-      const normResumeData = normalizeResumeData(apiData.resumeData);
-      const normCareerAnalysis = normalizeCareerAnalysis(apiData.careerAnalysis);
-      const derivedScore = normCareerAnalysis.atsScore?.score || 0;
-      const derivedSkills = normResumeData.skills || [];
-
-      clearTimers();
-      setJobs(rawJobs);
-      setInternships(rawInternships);
-      setResumeData(normResumeData);
-      setCareerAnalysis(normCareerAnalysis);
-      setAtsScore(derivedScore);
-      setParsedSkills(derivedSkills);
-      setMatcherPhase("results");
-
-      await cacheResumeResults(rawJobs, derivedScore, derivedSkills, rawInternships, normResumeData, normCareerAnalysis);
-
-      if (!isMockMode) {
-        try {
-          // 1. Insert a resume session first
-          const sessionPayload = {
-            user_id: user.id,
-            resume_name: file.name,
-            status: "generated"
-          };
-          const { data: sessionData, error: sessionErr } = await supabase
-            .from("resume_sessions")
-            .insert(sessionPayload)
-            .select("id")
-            .single();
-
-          if (sessionErr) {
-            console.error("Failed to insert resume session:", sessionErr);
-          } else if (sessionData) {
-            // 2. Insert into ai_analysis
-            const analysisPayload = {
-              session_id: sessionData.id,
-              user_id: user.id,
-              resume_review: normCareerAnalysis.resumeReview ? { content: normCareerAnalysis.resumeReview } : null,
-              ats_score: normCareerAnalysis.atsScore ? { score: normCareerAnalysis.atsScore.score, feedback: normCareerAnalysis.atsScore.feedback } : null,
-              skill_gap_analysis: normCareerAnalysis.skillGapAnalysis ? { content: normCareerAnalysis.skillGapAnalysis } : null,
-              interview_practice: normCareerAnalysis.interviewPractice ? { content: normCareerAnalysis.interviewPractice } : null,
-              career_roadmap: normCareerAnalysis.careerRoadmap ? { content: normCareerAnalysis.careerRoadmap } : null,
-              salary_insights: normCareerAnalysis.salaryInsights ? { content: normCareerAnalysis.salaryInsights } : null,
-              linkedin_optimization: normCareerAnalysis.linkedinOptimization ? { content: normCareerAnalysis.linkedinOptimization } : null,
-              cover_letter_generator: normCareerAnalysis.coverLetter ? { content: normCareerAnalysis.coverLetter } : null
-            };
-
-            const { error: analysisErr } = await supabase
-              .from("ai_analysis")
-              .insert(analysisPayload);
-
-            if (analysisErr) {
-              console.error("Failed to insert ai_analysis:", analysisErr);
-            } else {
-              console.log("Successfully stored AI analysis in database!");
-            }
-          }
-        } catch (dbErr) {
-          console.error("Database persistence error:", dbErr);
-        }
-      }
-
-      await updateProfile({
-        skills: derivedSkills.join(", "),
-        ats_score: derivedScore,
-        resume_name: file.name,
-      });
-
-      await incrementTrialsUsed();
-
-      setUserStats(prev => {
-        if (!prev) return prev;
-        const updatedStats = {
-          ...prev,
-          resume_uploaded: true,
-          ats_match_rank: derivedScore,
-          jobs_matched: rawJobs.length,
-        };
-        if (isMockMode) {
-          localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-        } else {
-          supabase
-            .from("user_stats")
-            .update({
-              resume_uploaded: true,
-              ats_match_rank: derivedScore,
-              jobs_matched: rawJobs.length,
-            })
-            .eq("user_id", user.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to update scan statistics:", error);
-            });
-        }
-        return updatedStats;
-      });
-    } catch (err) {
-      console.error(err);
-      clearTimers();
-      toast.error("Scraping failed", {
-        description: "We couldn't connect to the AI matching service. Try again in a few seconds.",
-      });
-      setMatcherPhase("upload");
-    }
-  };
-
-  // --- AI CAREER ASSISTANT LOGIC ---
-  const handleSendMessage = async (textToSend: string, actionType?: string) => {
-    if (!textToSend.trim() && !actionType) return;
-    const promptText = textToSend.trim() || (actionType ? `Triggered: ${actionType}` : "");
-    setChatInput("");
-
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}-user`,
-      sender: "user",
-      text: promptText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-
-    const updatedMessages = [...chatMessages, userMsg];
-    saveSessionMessages(activeSessionId, updatedMessages);
-    setIsAssistantTyping(true);
-
-    // Build full response text based on action type
-    const buildResponseText = () => {
-      let aiResponseText = "";
-      let isRoadmap = false;
-      let roadmapData: ChatMessage["roadmapData"] = undefined;
-      let isJobRecs = false;
-      let jobRecsData: ChatMessage["jobRecsData"] = undefined;
-      let isInterviewMode = false;
-      let interviewScore: number | undefined = undefined;
-      let interviewStrengths: string[] | undefined = undefined;
-      let interviewImprovements: string[] | undefined = undefined;
-
-      const userSkills = (parsedSkills && parsedSkills.length > 0)
-        ? parsedSkills.join(", ")
-        : (profile?.skills || "Python, React, CSS, JavaScript, HTML, TypeScript");
-      const resumeName = profile?.resume_name || "";
-      const name = profile?.full_name || "there";
-
-      if (actionType === "Interview Practice" || promptText.toLowerCase().includes("interview") || assistantMode === "interview") {
-        if (assistantMode !== "interview") {
-          setAssistantMode("interview");
-          setActiveInterviewStep(1);
-          aiResponseText = `# 🚀 Technical Interview Practice Mode\n\nWelcome **${name}**! I will act as your technical interviewer today.\n\n---\n\n## Question 1\n\n**Explain REST APIs and how they handle statelessness.**\n\n> Please type your detailed answer below and I will evaluate it with a score, strengths, and improvement notes.`;
-        } else {
-          isInterviewMode = true;
-          const userLen = promptText.length;
-          if (activeInterviewStep === 1) {
-            interviewScore = userLen > 80 ? 9 : userLen > 30 ? 7 : 5;
-            interviewStrengths = [
-              "Clearly defined the concept of REST architecture and resource endpoints.",
-              "Mentioned the client-server separation model correctly, highlighting self-contained requests."
-            ];
-            interviewImprovements = [
-              "Specifically explain standard HTTP verbs/methods (GET, POST, PUT, DELETE) and their actions.",
-              "Discuss how status codes (200 OK, 201 Created, 404 Not Found, 500 Server Error) convey resource state."
-            ];
-            aiResponseText = `# ✅ Evaluation — Question 1\n\nThank you for your response! Here is your custom evaluation report.\n\n---\n\n## Question 2\n\n**What is the difference between SQL and NoSQL databases, and when would you choose one over the other?**`;
-            setActiveInterviewStep(2);
-          } else if (activeInterviewStep === 2) {
-            interviewScore = userLen > 80 ? 8 : userLen > 30 ? 7 : 6;
-            interviewStrengths = [
-              "Identified key architectural differences (structured schemas vs. flexible schema-less stores).",
-              "Correctly explained scaling directions (vertical scaling for SQL vs. horizontal distribution for NoSQL)."
-            ];
-            interviewImprovements = [
-              "Reference ACID compliance guarantees in SQL databases for reliable transaction processing.",
-              "Provide concrete industry examples like PostgreSQL/MySQL for SQL and MongoDB/Cassandra for NoSQL."
-            ];
-            aiResponseText = `# ✅ Evaluation — Question 2\n\nSuperb database analysis! Here is your scoring report.\n\n---\n\n🎉 **You have completed your quick technical interview session!**\n\nClick **Clear Chat** or ask me any career questions to continue.`;
-            setAssistantMode("chat");
-            setActiveInterviewStep(0);
-          }
-        }
-      } else if (actionType === "Career Roadmap" || promptText.toLowerCase().includes("roadmap") || promptText.toLowerCase().includes("become a")) {
-        isRoadmap = true;
-        let role = "AI Engineer";
-        if (promptText.toLowerCase().includes("frontend")) role = "Frontend Developer";
-        if (promptText.toLowerCase().includes("fullstack") || promptText.toLowerCase().includes("full stack")) role = "Fullstack Developer";
-        if (role === "AI Engineer") {
-          roadmapData = [
-            { phase: "Phase 1", title: "Python Core Foundations", skills: ["Python syntax", "Object-Oriented Programming", "Data Structures", "APIs"], timeline: "Month 1-2" },
-            { phase: "Phase 2", title: "Data Science & Machine Learning", skills: ["Pandas", "NumPy", "Scikit-Learn", "Regression", "Decision Trees"], timeline: "Month 3-4" },
-            { phase: "Phase 3", title: "Deep Learning & Neural Networks", skills: ["PyTorch / TensorFlow", "CNNs", "RNNs", "Backpropagation"], timeline: "Month 5-6" },
-            { phase: "Phase 4", title: "Large Language Models & GenAI", skills: ["Transformers", "Prompt Engineering", "RAG", "LangChain", "Vector DBs"], timeline: "Month 7-9" },
-            { phase: "Phase 5", title: "Production AI Deployment", skills: ["Docker", "FastAPI", "AWS", "CI/CD pipelines", "Monitoring"], timeline: "Month 10-12" }
-          ];
-        } else if (role === "Frontend Developer") {
-          roadmapData = [
-            { phase: "Phase 1", title: "HTML, CSS & JavaScript Essentials", skills: ["Semantic HTML", "Flexbox/Grid", "ES6+ syntax", "DOM manipulation"], timeline: "Month 1-2" },
-            { phase: "Phase 2", title: "Modern Frontend Frameworks", skills: ["React.js", "State Management (Zustand/Redux)", "Routing"], timeline: "Month 3-4" },
-            { phase: "Phase 3", title: "Component Systems & Styling", skills: ["Tailwind CSS", "CSS Modules", "Responsive Web Design"], timeline: "Month 5-6" },
-            { phase: "Phase 4", title: "DevOps & Integration", skills: ["Git/GitHub Actions", "Vercel / Netlify", "Testing (Jest/Cypress)"], timeline: "Month 7-8" }
-          ];
-        } else {
-          roadmapData = [
-            { phase: "Phase 1", title: "Core Web Technologies", skills: ["HTML5", "CSS3", "Modern JavaScript ES6+"], timeline: "Month 1-2" },
-            { phase: "Phase 2", title: "Frontend Frameworks", skills: ["React.js", "TypeScript", "Tailwind CSS", "Zustand"], timeline: "Month 3-5" },
-            { phase: "Phase 3", title: "Backend Architecture", skills: ["Node.js", "Express.js", "PostgreSQL", "Prisma ORM"], timeline: "Month 6-8" },
-            { phase: "Phase 4", title: "System Deployment & Testing", skills: ["Docker", "AWS / Vercel", "Jest", "CI/CD Pipelines"], timeline: "Month 9-12" }
-          ];
-        }
-        aiResponseText = `# 🗺️ Phased Career Roadmap — ${role}\n\nHere is a comprehensive learning curriculum tailored to help you transition into a **${role}** role. Estimated timeline: **6–12 Months**.`;
-      } else if (actionType === "Job Recommendations" || promptText.toLowerCase().includes("recommend") || promptText.toLowerCase().includes("job")) {
-        isJobRecs = true;
-        jobRecsData = [
-          { title: "AI Research Engineer", company: "Google DeepMind", score: 95, matchReason: "Highly matches your background in Generative AI, Python scripting, and FastAPI integrations." },
-          { title: "Machine Learning Engineer", company: "Scale AI", score: 91, matchReason: "Excellent fit for your solid foundation in deep learning modeling and dataset pipelines." },
-          { title: "Backend Engineer (FastAPI & Node)", company: "Vercel", score: 88, matchReason: "Matches your experience building scalable asynchronous REST APIs and backend routers." },
-          { title: "Python Software Developer", company: "Stripe", score: 85, matchReason: "Perfect fit for your clean coding style, scripting expertise, and unit-testing systems." }
-        ];
-        aiResponseText = resumeName
-          ? `# 💼 Personalized Job Recommendations\n\nBased on your resume **${resumeName}** and skills (**${userSkills}**), here are your top matched roles:`
-          : `# 💼 Personalized Job Recommendations\n\n> ⚠️ No resume found. Upload one under **Job Matcher** for precision matching.\n\nBased on your profile skills (**${userSkills}**), here are the top roles for your background:`;
-      } else if (actionType === "Resume Review" || promptText.toLowerCase().includes("resume")) {
-        const reviewText = careerAnalysis?.resumeReview;
-        if (reviewText && reviewText.trim().length > 0) {
-          aiResponseText = `# 📝 Resume Review Report\n\nBased on your resume **${resumeName || "uploaded resume"}**, here is your personalized AI audit:\n\n---\n\n${reviewText}`;
-        } else {
-          aiResponseText = `# 📝 Resume Review Report\n\n${resumeName ? `I've thoroughly reviewed **${resumeName}** against current tech hiring standards.` : `Upload your resume under **Job Matcher** for a full audit.`}\n\n---\n\n## 🔑 Key Recommendations\n\n**1. Add Measurable Achievements**\nInstead of *"Built APIs using FastAPI"*, use *"Deployed 15+ asynchronous FastAPI endpoints, cutting response latency by 32%"*.\n\n**2. Incorporate Certifications**\nHighlight AWS Certified Cloud Practitioner, TensorFlow Developer, or similar validations prominently.\n\n**3. Use the STAR Framework**\nFrame all experience bullets using Situation → Task → Action → Result for maximum impact.\n\n**4. Optimize Keyword Density**\nEnsure your target tech stack (Docker, FastAPI, Kubernetes) appears 3–4× throughout the document.`;
-        }
-      } else if (actionType === "ATS Score Check" || promptText.toLowerCase().includes("ats")) {
-        const score = atsScore || profile?.ats_score || 78;
-        const feedbackText = careerAnalysis?.atsScore?.feedback;
-        if (feedbackText && feedbackText.trim().length > 0) {
-          aiResponseText = `# 🎯 ATS Suitability Audit\n\nYour current ATS scan score: **${score}%**\n\n---\n\n## Custom Optimization Recommendations\n\n${feedbackText}`;
-        } else {
-          aiResponseText = `# 🎯 ATS Suitability Audit\n\nYour current ATS (Applicant Tracking System) scan score: **${score}%**\n\n---\n\n## 🔧 Key Optimizations to Reach 95%+\n\n**• Keyword Density** — Target keywords (Docker, FastAPI, Vector DBs) should appear 3–4× in natural context.\n\n**• Format Compliance** — Avoid multi-column layouts, icons, and text boxes which confuse ATS parsers.\n\n**• Section Headers** — Use standard labels: "Professional Experience", "Technical Skills", "Education".\n\n**• File Format** — Submit text-based PDFs only. Avoid scanned image formats that skip indexing entirely.`;
-        }
-      } else if (actionType === "Skill Gap Analysis" || promptText.toLowerCase().includes("skill") || promptText.toLowerCase().includes("learn")) {
-        const gapText = careerAnalysis?.skillGapAnalysis;
-        if (gapText && gapText.trim().length > 0) {
-          aiResponseText = `# 📊 Skill Gap Analysis\n\nHere is your personalized AI gap assessment:\n\n---\n\n${gapText}`;
-        } else {
-          aiResponseText = `# 📊 Skill Gap Analysis\n\nMapping your skills against top AI/Software engineering hiring standards:\n\n---\n\n## ✅ Your Current Strengths\n\n${userSkills.split(",").map(s => `- **${s.trim()}**`).join("\n")}\n\n---\n\n## 🚀 Priority Skills to Acquire Next\n\n**1. Docker & Kubernetes** — Essential for containerizing and deploying modern microservices.\n\n**2. AWS / Cloud Deployment** — Industry-standard platform for serverless and scalable architectures.\n\n**3. LangChain & LlamaIndex** — Critical for building Generative AI agents and RAG pipelines.\n\n**4. Vector Databases (Pinecone, pgvector)** — The backbone of modern LLM-powered search systems.\n\n> 💡 *Build a RAG app with FastAPI + LangChain + pgvector to master 3 of these in one project!*`;
-        }
-      } else if (actionType === "Salary Insights" || promptText.toLowerCase().includes("salary") || promptText.toLowerCase().includes("how much")) {
-        const salaryText = careerAnalysis?.salaryInsights;
-        if (salaryText && salaryText.trim().length > 0) {
-          aiResponseText = `# 💵 Salary Insights\n\nBased on your profile and target roles:\n\n---\n\n${salaryText}`;
-        } else {
-          aiResponseText = `# 💵 Salary Insights Framework\n\nAverage annual compensation for top tech roles (US market):\n\n---\n\n## 🤖 AI / ML Engineer\n- **Entry:** $115,000 – $140,000\n- **Mid-Level:** $150,000 – $185,000\n- **Senior:** $190,000 – $240,000+\n\n## 💻 Full-Stack Developer\n- **Entry:** $85,000 – $110,000\n- **Mid-Level:** $120,000 – $155,000\n- **Senior:** $165,000 – $200,000\n\n## ☁️ DevOps / Cloud Engineer\n- **Entry:** $95,000 – $120,000\n- **Mid-Level:** $130,000 – $165,000\n- **Senior:** $175,000 – $220,000\n\n> 📌 *Total comp often includes equity, bonuses, and stock grants — negotiate for the full package!*`;
-        }
-      } else if (actionType === "LinkedIn Optimization" || promptText.toLowerCase().includes("linkedin")) {
-        const linkedinText = careerAnalysis?.linkedinOptimization;
-        if (linkedinText && linkedinText.trim().length > 0) {
-          aiResponseText = `# 🌐 LinkedIn Profile Optimization\n\nYour personalized recruiter-magnet strategy:\n\n---\n\n${linkedinText}`;
-        } else {
-          aiResponseText = `# 🌐 LinkedIn Profile Optimization Guide\n\nTransform your LinkedIn into a recruiter magnet with these power moves:\n\n---\n\n**• Headline Formula**\nDon't write *"Student at University"*. Write: *"AI Engineer | Python · React · FastAPI | Building GenAI Solutions"*\n\n**• About Summary Structure**\nParagraph 1: Your passion and mission. Paragraph 2: Your primary tech stack. Paragraph 3: What you're building + CTA.\n\n**• Featured Section**\nPin your best project, resume PDF, or GitHub profile at the very top for instant visibility.\n\n**• Skills Section**\nList 50 skills — ensure your top 3 are high-volume keywords matched to your target roles.\n\n**• Consistency**\nYour LinkedIn headline, resume headline, and portfolio bio should all tell the same story.`;
-        }
-      } else if (actionType === "Cover Letter Generator" || promptText.toLowerCase().includes("cover letter")) {
-        const letterText = careerAnalysis?.coverLetter;
-        if (letterText && letterText.trim().length > 0) {
-          aiResponseText = `# ✉️ Custom Cover Letter\n\nHere is your tailored cover letter, ready to personalize and send:\n\n---\n\n${letterText}\n\n---`;
-        } else {
-          aiResponseText = `# ✉️ Custom Cover Letter Generator\n\nHere is a professional, impact-driven cover letter template:\n\n---\n\n**Subject: Application for Software / AI Engineer Role**\n\nDear Hiring Team,\n\nI am writing to express my strong interest in this engineering role. With a robust foundation in **${userSkills}**, and hands-on experience delivering scalable applications, I am excited to contribute to your team's mission.\n\nIn my recent work, I designed and shipped asynchronous API systems with FastAPI, integrated Generative AI components, and collaborated across frontend and backend layers. This cross-functional experience allows me to bridge technical complexity with user-first delivery.\n\nI'd love the opportunity to discuss how my background aligns with your current roadmap. Thank you for your time and consideration.\n\nWarm regards,\n**${name}**\n${user?.email || ""}\n\n---`;
-        }
-      } else {
-        aiResponseText = `# 🤖 AI Career Coach\n\nHello **${name}**! I'm here to accelerate your career journey.\n\n---\n\n**You asked:** *"${promptText}"*\n\n## 💡 General Career Advice\n\n**• Build Deployed Projects** — Deployed apps with live URLs impress hiring managers far more than local demos.\n\n**• Optimize Your GitHub** — Clean READMEs, consistent commits, and pinned repos signal professionalism immediately.\n\n**• Network Strategically** — Send 3–5 targeted LinkedIn messages weekly to engineers in your target field. This is how most referrals happen.\n\n**• Track Everything** — Use the **Applications Tracker** tab to monitor your pipeline and follow up consistently.\n\n> Ask me anything — resume feedback, salary negotiation, interview prep, or career planning!`;
-      }
-
-      return { aiResponseText, isRoadmap, roadmapData, isJobRecs, jobRecsData, isInterviewMode, interviewScore, interviewStrengths, interviewImprovements };
-    };
-
-    // Short artificial thinking delay, then stream word by word
     setTimeout(() => {
-      const { aiResponseText, isRoadmap, roadmapData, isJobRecs, jobRecsData, isInterviewMode, interviewScore, interviewStrengths, interviewImprovements } = buildResponseText();
-
-      const msgId = `msg-${Date.now()}-ai`;
-      const words = aiResponseText.split(" ");
-      let wordIdx = 0;
-      let streamedText = "";
-
-      // Initial typing indicator
-      setIsAssistantTyping(false);
-
-      // Insert placeholder message
-      const placeholderMsg: ChatMessage = {
-        id: msgId,
-        sender: "ai",
-        text: "",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isRoadmap,
-        roadmapData,
-        isJobRecs,
-        jobRecsData,
-        isInterviewMode,
-        interviewScore,
-        interviewStrengths,
-        interviewImprovements,
-      };
-
-      setChatMessages(prev => {
-        const msgs = [...prev, placeholderMsg];
-        localStorage.setItem(`ai_chat_messages_${activeSessionId}`, JSON.stringify(msgs));
-        return msgs;
-      });
-
-      // Clear any previous streaming interval
-      if (streamingIntervalRef.current) {
-        clearInterval(streamingIntervalRef.current);
-      }
-
-      streamingIntervalRef.current = setInterval(() => {
-        if (wordIdx >= words.length) {
-          clearInterval(streamingIntervalRef.current!);
-          streamingIntervalRef.current = null;
-          return;
-        }
-        streamedText += (wordIdx === 0 ? "" : " ") + words[wordIdx];
-        wordIdx++;
-        setChatMessages(prev => {
-          const msgs = prev.map(m =>
-            m.id === msgId ? { ...m, text: streamedText } : m
-          );
-          localStorage.setItem(`ai_chat_messages_${activeSessionId}`, JSON.stringify(msgs));
-          return msgs;
-        });
-      }, 28);
+      setRipples((prev) => prev.filter((r) => r.id !== newRipple.id));
     }, 600);
-  };
 
-  const handleClearChat = () => {
-    saveSessionMessages(activeSessionId, []);
-    setAssistantMode("chat");
-    setActiveInterviewStep(0);
-    toast.success("Chat history cleared!");
-  };
-
-  const handleExportChat = () => {
-    if (chatMessages.length === 0) {
-      toast.warning("No messages to export!");
-      return;
+    if (onClick) {
+      onClick(e);
     }
-    const formattedText = chatMessages.map(m => {
-      return `[${m.timestamp}] ${m.sender === "user" ? "USER" : "AI"}:\n${m.text}\n`;
-    }).join("\n---\n\n");
-
-    const blob = new Blob([formattedText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `ai_career_chat_${activeSessionId}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
-    toast.success("Chat exported successfully!");
-  };
-
-  const handleNewChatSession = () => {
-    const newId = `session-${Date.now()}`;
-    const newSession = {
-      id: newId,
-      title: `Career Talk ${chatSessions.length + 1}`,
-      date: new Date().toLocaleDateString()
-    };
-    const updated = [newSession, ...chatSessions];
-    setChatSessions(updated);
-    localStorage.setItem("ai_chat_sessions", JSON.stringify(updated));
-    setActiveSessionId(newId);
-    toast.success("Created new chat session!");
-  };
-
-  const handleDeleteChatSession = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (chatSessions.length <= 1) {
-      toast.error("You must keep at least one active chat session!");
-      return;
-    }
-    const updated = chatSessions.filter(s => s.id !== id);
-    setChatSessions(updated);
-    localStorage.setItem("ai_chat_sessions", JSON.stringify(updated));
-
-    localStorage.removeItem(`ai_chat_messages_${id}`);
-
-    if (activeSessionId === id) {
-      setActiveSessionId(updated[0].id);
-    }
-    toast.success("Session deleted!");
-  };
-
-  const handleApplyClick = async (job: Job) => {
-    if (!user) return;
-
-    setUserStats(prev => {
-      if (!prev) return prev;
-      const newSentCount = prev.applications_sent + 1;
-      const updatedStats = { ...prev, applications_sent: newSentCount };
-
-      if (isMockMode) {
-        localStorage.setItem(`mock_user_stats_${user.id}`, JSON.stringify(updatedStats));
-      } else {
-        supabase
-          .from("user_stats")
-          .update({ applications_sent: newSentCount })
-          .eq("user_id", user.id)
-          .then(({ error }) => {
-            if (error) console.error("Failed to increment applications sent:", error);
-          });
-      }
-      return updatedStats;
-    });
-
-    const alreadyTracked = applications.some(app => app.company.toLowerCase() === job.company.toLowerCase() && app.role.toLowerCase() === job.title.toLowerCase());
-    if (!alreadyTracked) {
-      addApplication(job.company, job.title, "Applied", job.location);
-    }
-  };
-
-  useEffect(() => {
-    if (user) {
-      fetchUserStats();
-    }
-  }, [user, fetchUserStats]);
-
-  useEffect(() => {
-    if (user && userStats) {
-      syncProfileScore();
-    }
-  }, [user, !!userStats, profile, parsedSkills, syncProfileScore]);
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      navigate({ to: "/auth/signin" });
-    }
-  }, [user, authLoading, navigate]);
-
-  useEffect(() => {
-    if (user) {
-      if (activeTab === "saved") {
-        fetchSavedJobs();
-      } else if (activeTab === "matcher") {
-        loadCachedResumeResults();
-      }
-    }
-  }, [user, activeTab, fetchSavedJobs, loadCachedResumeResults]);
-
-  const handleProfileSave = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-
-    const updates = {
-      full_name: (fd.get("fullName") as string) || profile?.full_name || "",
-      experience_level: (fd.get("experienceLevel") as string) || profile?.experience_level || "Freshman/Student",
-      preferred_role: (fd.get("preferredRole") as string) || profile?.preferred_role || "",
-      preferred_location: (fd.get("preferredLocation") as string) || profile?.preferred_location || "",
-      job_type: (fd.get("jobType") as string) || profile?.job_type || "All",
-      skills: (fd.get("skills") as string) || profile?.skills || "",
-    };
-
-    setIsSavingProfile(true);
-    try {
-      const success = await updateProfile(updates);
-      if (success && updates.skills) {
-        setParsedSkills(
-          updates.skills
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        );
-      }
-    } catch (err) {
-      toast.error("An error occurred while saving: " + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setIsSavingProfile(false);
-    }
-  };
-
-  if (authLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-center space-y-4">
-          <Loader2 className="h-10 w-10 animate-spin text-primary mx-auto" />
-          <p className="text-sm text-muted-foreground font-medium">Loading session...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const NavItem = ({
-    tab,
-    icon: Icon,
-    label,
-  }: {
-    tab: ActiveTab;
-    icon: React.ComponentType<{ className?: string }>;
-    label: string;
-  }) => {
-    const active = activeTab === tab;
-    return (
-      <button
-        onClick={() => {
-          setActiveTab(tab);
-          setMobileMenuOpen(false);
-        }}
-        className={[
-          "flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-semibold transition-all duration-200 ease-in-out active:scale-95",
-          active
-            ? "bg-primary text-primary-foreground shadow-md scale-[1.02]"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground hover:translate-x-0.5",
-        ].join(" ")}
-      >
-        <Icon className={["h-4 w-4 transition-transform duration-200", active ? "" : "group-hover:scale-110"].join(" ")} />
-        {label}
-      </button>
-    );
-  };
-
-  const renderFormattedText = (text: string) => {
-    const lines = text.split("\n");
-    const elements: React.ReactNode[] = [];
-
-    const parseInline = (content: string, keyPrefix: string) => {
-      // Parse bold (**text**) and italic (*text*) inline
-      const parts = content.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
-      return parts.map((part, pidx) => {
-        const k = `${keyPrefix}-${pidx}`;
-        if (part.startsWith("**") && part.endsWith("**")) {
-          return <strong key={k} className="font-bold text-foreground">{part.slice(2, -2)}</strong>;
-        }
-        if (part.startsWith("*") && part.endsWith("*") && !part.startsWith("**")) {
-          return <em key={k} className="italic text-muted-foreground">{part.slice(1, -1)}</em>;
-        }
-        if (part.startsWith("`") && part.endsWith("`")) {
-          return <code key={k} className="bg-muted px-1.5 py-0.5 rounded text-[11px] font-mono text-primary">{part.slice(1, -1)}</code>;
-        }
-        return part;
-      });
-    };
-
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx];
-
-      // H1: # heading
-      if (line.startsWith("# ")) {
-        elements.push(
-          <h2 key={idx} className="text-[22px] font-black text-foreground tracking-tight mt-5 mb-3 first:mt-1 leading-tight">
-            {line.replace(/^# /, "")}
-          </h2>
-        );
-        continue;
-      }
-      // H2: ## heading
-      if (line.startsWith("## ")) {
-        elements.push(
-          <h3 key={idx} className="text-[16px] font-extrabold text-foreground tracking-tight mt-4 mb-2 border-b border-border/30 pb-1">
-            {line.replace(/^## /, "")}
-          </h3>
-        );
-        continue;
-      }
-      // H3: ### heading
-      if (line.startsWith("### ")) {
-        elements.push(
-          <h4 key={idx} className="text-[14px] font-bold text-foreground mt-3 mb-1.5">
-            {line.replace(/^### /, "")}
-          </h4>
-        );
-        continue;
-      }
-      // Horizontal rule
-      if (line.trim() === "---") {
-        elements.push(<hr key={idx} className="border-border/40 my-3" />);
-        continue;
-      }
-      // Blockquote: > text
-      if (line.startsWith("> ")) {
-        elements.push(
-          <blockquote key={idx} className="border-l-4 border-primary/40 pl-3 py-1 my-2 bg-primary/5 rounded-r-lg">
-            <p className="text-sm text-muted-foreground italic">{parseInline(line.replace(/^> /, ""), `bq-${idx}`)}</p>
-          </blockquote>
-        );
-        continue;
-      }
-      // Ordered list: 1. item
-      if (/^\d+\.\s/.test(line)) {
-        elements.push(
-          <div key={idx} className="flex gap-2 items-start mt-1.5">
-            <span className="text-primary font-bold text-xs mt-0.5 shrink-0">{line.match(/^(\d+)\./)![1]}.</span>
-            <p className="text-sm text-muted-foreground leading-relaxed">{parseInline(line.replace(/^\d+\.\s/, ""), `ol-${idx}`)}</p>
-          </div>
-        );
-        continue;
-      }
-      // Unordered list: - item or • item or * item
-      if (/^[-•*]\s/.test(line)) {
-        elements.push(
-          <div key={idx} className="flex gap-2 items-start mt-1.5">
-            <span className="text-primary font-black text-sm mt-0 shrink-0">•</span>
-            <p className="text-sm text-muted-foreground leading-relaxed">{parseInline(line.replace(/^[-•*]\s/, ""), `ul-${idx}`)}</p>
-          </div>
-        );
-        continue;
-      }
-      // Empty line
-      if (line.trim() === "") {
-        elements.push(<div key={idx} className="h-1" />);
-        continue;
-      }
-      // Default paragraph
-      elements.push(
-        <p key={idx} className="text-sm text-muted-foreground leading-relaxed mt-1">
-          {parseInline(line, `p-${idx}`)}
-        </p>
-      );
-    }
-
-    return elements;
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] dark:bg-slate-950 text-foreground transition-colors duration-300">
-      {/* SIDEBAR FOR DESKTOP */}
-      <aside className="hidden md:flex md:w-64 md:flex-col border-r border-slate-200/50 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/60 backdrop-blur-md">
-        <div className="flex h-16 items-center justify-between border-b border-slate-200/50 dark:border-slate-800/80 px-6">
-          <div
-            className="flex items-center gap-2 group cursor-pointer"
-            onClick={() => navigate({ to: "/" })}
-          >
-            <div className="rounded-lg bg-primary p-1.5 text-primary-foreground">
-              <Briefcase className="h-5 w-5" />
+    <div
+      onClick={handleClick}
+      className={`ripple-container cursor-pointer select-none ${className}`}
+      {...props}
+    >
+      {ripples.map((ripple) => (
+        <span
+          key={ripple.id}
+          className="ripple-effect"
+          style={{
+            left: ripple.x - 20,
+            top: ripple.y - 20,
+            width: 40,
+            height: 40,
+            backgroundColor: "rgba(139, 92, 246, 0.25)"
+          }}
+        />
+      ))}
+      {children}
+    </div>
+  );
+}
+
+// Circular progress ring helper
+function CircularProgress({
+  value,
+  size = 120,
+  strokeWidth = 10,
+  primaryColor = "#8b5cf6",
+  secondaryColor = "rgba(255, 255, 255, 0.05)",
+  fontSize = "1.5rem",
+  showText = true,
+}: {
+  value: number;
+  size?: number;
+  strokeWidth?: number;
+  primaryColor?: string;
+  secondaryColor?: string;
+  fontSize?: string;
+  showText?: boolean;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const strokeDashoffset = circumference - (value / 100) * circumference;
+
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="transform -rotate-90">
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="transparent"
+          stroke={secondaryColor}
+          strokeWidth={strokeWidth}
+        />
+        <circle
+          className="progress-ring-circle"
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="transparent"
+          stroke={primaryColor}
+          strokeWidth={strokeWidth}
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+        />
+      </svg>
+      {showText && (
+        <span className="absolute font-black text-foreground" style={{ fontSize }}>
+          {value}%
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Numeric transition counter using requestAnimationFrame
+function AnimatedCounter({ value, duration = 800 }: { value: number; duration?: number }) {
+  const [current, setCurrent] = useState(0);
+  const prevVal = useRef(0);
+
+  useEffect(() => {
+    let startTimestamp: number | null = null;
+    const startValue = prevVal.current;
+    const diff = value - startValue;
+    if (diff === 0) {
+      setCurrent(value);
+      return;
+    }
+
+    const step = (timestamp: number) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      const val = Math.floor(startValue + progress * diff);
+      setCurrent(val);
+
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      } else {
+        setCurrent(value);
+        prevVal.current = value;
+      }
+    };
+
+    window.requestAnimationFrame(step);
+  }, [value, duration]);
+
+  return <>{current}</>;
+}
+
+// Typewriter cycling component
+function TypewriterEffect({ phrases }: { phrases: string[] }) {
+  const [currentPhraseIndex, setCurrentPhraseIndex] = useState(0);
+  const [displayedText, setDisplayedText] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    const phrase = phrases[currentPhraseIndex];
+    const speed = isDeleting ? 25 : 55;
+
+    const handleTyping = () => {
+      if (!isDeleting) {
+        setDisplayedText(phrase.substring(0, displayedText.length + 1));
+        if (displayedText === phrase) {
+          timer = setTimeout(() => setIsDeleting(true), 2500);
+        } else {
+          timer = setTimeout(handleTyping, speed);
+        }
+      } else {
+        setDisplayedText(phrase.substring(0, displayedText.length - 1));
+        if (displayedText === "") {
+          setIsDeleting(false);
+          setCurrentPhraseIndex((prev) => (prev + 1) % phrases.length);
+          timer = setTimeout(handleTyping, 400);
+        } else {
+          timer = setTimeout(handleTyping, speed);
+        }
+      }
+    };
+
+    timer = setTimeout(handleTyping, speed);
+    return () => clearTimeout(timer);
+  }, [displayedText, isDeleting, currentPhraseIndex, phrases]);
+
+  return (
+    <span className="typewriter-cursor pr-1 min-h-[1.5em] inline-block text-[#3b82f6] font-semibold drop-shadow-md">
+      {displayedText}
+    </span>
+  );
+}
+
+const PipelineStepCard = ({
+  stepNum,
+  title,
+  description,
+  status,
+}: {
+  stepNum: number;
+  title: string;
+  description: string;
+  status: "pending" | "active" | "success" | "failed";
+}) => {
+  return (
+    <div
+      className={`relative rounded-xl p-3 border transition-all duration-300 ${status === "success"
+          ? "bg-slate-950/20 border-emerald-500/20 shadow-[0_4px_12px_rgba(16,185,129,0.05)]"
+          : status === "active"
+            ? "bg-[#8b5cf6]/5 border-[#8b5cf6]/35 shadow-[0_4px_12px_rgba(139,92,246,0.1)] scale-[1.02]"
+            : status === "failed"
+              ? "bg-red-500/5 border-red-500/25"
+              : "bg-slate-950/40 border-white/[0.04] opacity-65"
+        }`}
+    >
+      <div className="flex items-start gap-2.5">
+        <div className="mt-0.5 shrink-0">
+          {status === "success" && (
+            <div className="w-5 h-5 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center animate-in zoom-in-50 duration-300">
+              <Check className="w-3 h-3 text-emerald-400" />
             </div>
-            <span className="text-base font-bold tracking-tight text-foreground">
-              AI Job<span className="text-primary">Matcher</span>
-            </span>
-          </div>
+          )}
+          {status === "active" && (
+            <div className="w-5 h-5 rounded-full bg-[#8b5cf6]/20 border border-[#8b5cf6] flex items-center justify-center relative">
+              <Loader2 className="w-3 h-3 text-[#8b5cf6] animate-spin" />
+            </div>
+          )}
+          {status === "failed" && (
+            <div className="w-5 h-5 rounded-full bg-red-500/20 border border-red-500 flex items-center justify-center animate-pulse">
+              <span className="text-[10px] font-extrabold text-red-400">!</span>
+            </div>
+          )}
+          {status === "pending" && (
+            <div className="w-5 h-5 rounded-full bg-slate-950 border border-white/10 flex items-center justify-center text-[10px] font-extrabold text-slate-500">
+              {stepNum}
+            </div>
+          )}
         </div>
 
-        <nav className="flex-1 space-y-1.5 p-4 overflow-y-auto">
-          <NavItem tab="dashboard" icon={Layers} label="Dashboard" />
-          <NavItem tab="matcher" icon={Sparkles} label="Job Matcher" />
-          <NavItem tab="assistant" icon={MessageSquare} label="AI Career Assistant" />
-          <NavItem tab="saved" icon={Bookmark} label="Saved Jobs" />
-          <NavItem tab="applications" icon={Briefcase} label="Applications" />
-          <NavItem tab="profile" icon={UserIcon} label="Profile" />
-        </nav>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <h5
+            className={`text-xs font-black transition-colors duration-300 ${status === "success"
+                ? "text-emerald-400"
+                : status === "active"
+                  ? "text-[#8b5cf6]"
+                  : "text-slate-300"
+              }`}
+          >
+            {title}
+          </h5>
+          <p className="text-[9px] text-slate-400 font-medium leading-relaxed select-none">
+            {description}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
 
-        {/* User Card */}
-        <div className="border-t border-slate-200/50 dark:border-slate-800/80 p-4 space-y-3">
+function DashboardLayout() {
+  const { user, profile, updateProfile, signOut, signIn, isMockMode } = useAuth();
+  const { theme, setTheme } = useTheme();
+  const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Active Tab state: Dashboard, Job Matcher, Saved Jobs, Applications, Profile, Settings
+  const [activeTab, setActiveTab] = useState<string>("dashboard");
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Theme transitions & mounting trigger
+  useEffect(() => {
+    setIsMounted(true);
+    if (!localStorage.getItem("theme")) {
+      setTheme("dark");
+    }
+  }, []);
+
+  // Sync profile details if available - Starts empty/zero by default
+  const [profileForm, setProfileForm] = useState({
+    fullName: "",
+    email: "",
+    experienceLevel: "Freshman/Student",
+    preferredJobType: "Internship",
+    targetJobTitle: "",
+    targetCityState: "",
+  });
+  const [skillsList, setSkillsList] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (profile) {
+      setProfileForm({
+        fullName: profile.full_name || "",
+        email: profile.email || "",
+        experienceLevel: profile.experience_level || "Freshman/Student",
+        preferredJobType: profile.job_type || "Internship",
+        targetJobTitle: profile.preferred_role || "",
+        targetCityState: profile.preferred_location || "",
+      });
+      if (profile.skills) {
+        setSkillsList(profile.skills.split(",").filter(Boolean));
+      }
+    }
+  }, [profile]);
+
+  // Checklist interactive states (Starts fully uncompleted to support zero default metrics)
+  const [checklist, setChecklist] = useState({
+    resume: false,
+    atsAudit: false,
+    matchJobs: false,
+    applyRoles: false,
+  });
+
+  const [resumeFile, setResumeFile] = useState<{ name: string; size: string } | null>(null);
+
+  // Saved Jobs tracking
+  const [savedJobsList, setSavedJobsList] = useState<any[]>([]);
+
+  // Applications list
+  const [applications, setApplications] = useState<any[]>([]);
+
+  // Job Matcher Sub-system states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedRoleType, setSelectedRoleType] = useState("All");
+  const [isScraping, setIsScraping] = useState(false);
+  const [jobsList, setJobsList] = useState<any[]>([]);
+  const [n8nResponse, setN8nResponse] = useState<any>(null);
+
+  const [pipelineStatus, setPipelineStatus] = useState<{
+    step: "idle" | "analyzing" | "extracting" | "scoring" | "matching" | "complete" | "failed";
+    progress: number;
+    details?: string;
+    isFallback: boolean;
+  }>({
+    step: "idle",
+    progress: 0,
+    isFallback: false,
+  });
+
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
+  const [matchesRemaining, setMatchesRemaining] = useState<number>(3);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  // Setup initial completed checklist items on first load to trigger animations
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setChecklist({
+        resume: false,
+        atsAudit: false,
+        matchJobs: false,
+        applyRoles: false,
+      });
+      setResumeFile(null);
+      setProfileForm((prev) => ({
+        ...prev,
+        fullName: "",
+        email: "",
+        targetJobTitle: "",
+        targetCityState: "",
+      }));
+      setSkillsList([]);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check extension
+    const validExtensions = [".pdf", ".doc", ".docx", ".xls", ".xlsx"];
+    const fileNameLower = file.name.toLowerCase();
+    const isValidType = validExtensions.some((ext) => fileNameLower.endsWith(ext));
+
+    if (!isValidType) {
+      toast.error("Invalid file format", {
+        description: "Please upload a PDF (.pdf), Word (.doc, .docx) or Excel (.xls, .xlsx) resume.",
+      });
+      e.target.value = "";
+      return;
+    }
+
+    // Check size < 2MB (2 * 1024 * 1024 bytes)
+    const maxSize = 2 * 1024 * 1024;
+    if (file.size >= maxSize) {
+      toast.error("File size exceeded", {
+        description: "Resume size must be under 2 MB.",
+      });
+      e.target.value = "";
+      return;
+    }
+
+    setStagedFile(file);
+    toast.success(`${file.name} staged successfully!`, {
+      description: "Click 'Analyze & Find Matches' to begin parsing.",
+    });
+    e.target.value = "";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    // Check extension
+    const validExtensions = [".pdf", ".doc", ".docx", ".xls", ".xlsx"];
+    const fileNameLower = file.name.toLowerCase();
+    const isValidType = validExtensions.some((ext) => fileNameLower.endsWith(ext));
+
+    if (!isValidType) {
+      toast.error("Invalid file format", {
+        description: "Please upload a PDF (.pdf), Word (.doc, .docx) or Excel (.xls, .xlsx) resume.",
+      });
+      return;
+    }
+
+    // Check size < 2MB (2 * 1024 * 1024 bytes)
+    const maxSize = 2 * 1024 * 1024;
+    if (file.size >= maxSize) {
+      toast.error("File size exceeded", {
+        description: "Resume size must be under 2 MB.",
+      });
+      return;
+    }
+
+    setStagedFile(file);
+    toast.success(`${file.name} staged successfully!`, {
+      description: "Click 'Analyze & Find Matches' to begin parsing.",
+    });
+  };
+
+  const startAnalysis = async (file: File) => {
+    if (!file) return;
+
+    // Check environment variables (throw warnings/asserts if missing)
+    const API_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || "https://primary-production-48b6.up.railway.app/webhook/upload-resume";
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+    const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    if (!API_URL) {
+      const msg = "Environment variable VITE_N8N_WEBHOOK_URL is missing!";
+      toast.error(msg);
+      console.error("[UPLOAD DEBUG] missing env variable: VITE_N8N_WEBHOOK_URL");
+      return;
+    }
+    if (!SUPABASE_URL) {
+      const msg = "Environment variable VITE_SUPABASE_URL is missing!";
+      toast.error(msg);
+      console.error("[UPLOAD DEBUG] missing env variable: VITE_SUPABASE_URL");
+      return;
+    }
+    if (!SUPABASE_ANON_KEY) {
+      const msg = "Environment variable VITE_SUPABASE_ANON_KEY is missing!";
+      toast.error(msg);
+      console.error("[UPLOAD DEBUG] missing env variable: VITE_SUPABASE_ANON_KEY");
+      return;
+    }
+
+    // Decrement free trial usage
+    setMatchesRemaining((prev) => Math.max(0, prev - 1));
+
+    // Clear staged file so we transition smoothly to stepper status
+    setStagedFile(null);
+
+    // Initialize pipeline: Step 1 active
+    setPipelineStatus({
+      step: "analyzing",
+      progress: 10,
+      details: "Validating file format and size under 2MB...",
+      isFallback: false,
+    });
+
+    const formData = new FormData();
+    formData.append("resume", file);
+
+    const uploadToastId = toast.loading("Processing resume with AI...", {
+      description: "Uploading file to n8n Railway webhook...",
+    });
+
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    // AbortController for network timeout (25 seconds limit)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+    try {
+      setPipelineStatus({
+        step: "analyzing",
+        progress: 25,
+        details: "Uploading payload to n8n Railway webhook nodes...",
+        isFallback: false,
+      });
+
+      const response = await fetch(API_URL, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      console.group("UPLOAD DEBUG");
+      console.log("File Name:", file.name);
+      console.log("File Size:", file.size);
+      console.log("API URL:", API_URL);
+      console.log("Response:", response);
+      console.log("Response Status:", response.status);
+      console.groupEnd();
+
+      if (!response.ok) {
+        let errDetails = `Upload failed. Status: ${response.status}`;
+        try {
+          const errText = await response.text();
+          const errJson = JSON.parse(errText);
+          if (errJson && errJson.message) {
+            errDetails = errJson.message;
+          } else {
+            errDetails = errText.substring(0, 100);
+          }
+        } catch { }
+
+        if (response.status === 500) {
+          throw new Error("N8N unavailable or internal server error (500) inside n8n workflow execution node.");
+        } else if (response.status === 404) {
+          throw new Error("Backend unavailable - endpoint not found (404).");
+        } else {
+          throw new Error(errDetails);
+        }
+      }
+
+      const text = await response.text();
+      let responseData: any = null;
+      try {
+        responseData = JSON.parse(text);
+      } catch {
+        responseData = text;
+      }
+
+      setN8nResponse(responseData);
+
+      // Step 1 Complete -> Transition to Step 2: Skills Extraction
+      setPipelineStatus({
+        step: "extracting",
+        progress: 50,
+        details: "Extracting professional skill tags from document structure...",
+        isFallback: false,
+      });
+      await delay(1200);
+
+      // Extract skills or values if returned in typical n8n schema
+      let extractedSkills = ["React", "CSS", "TypeScript", "Tailwind"];
+      let nameOverride = "";
+
+      if (responseData && typeof responseData === "object") {
+        if (responseData.success) {
+          console.log("n8n success confirmation parsed successfully!");
+          const parsedJobs = [...(responseData.jobs || []), ...(responseData.internships || [])];
+          if (parsedJobs.length > 0) {
+            const mappedJobs = parsedJobs.map((job: any, index: number) => ({
+              id: job.id || `n8n-job-${index}-${Date.now()}`,
+              title: job.title || job.role || "Matched Opportunity",
+              company: job.company || "Partner",
+              location: job.location || "Remote",
+              salary: job.salary || "$95k/yr",
+              score: job.score || job.matchScore || 85,
+              type: job.type || "Fullstack",
+              matchedSkills: Array.isArray(job.skills) ? job.skills : ["React", "TypeScript"],
+              missingSkills: Array.isArray(job.missingSkills) ? job.missingSkills : []
+            }));
+            setJobsList(mappedJobs);
+            console.log("Matched lists mapped successfully from n8n response:", mappedJobs);
+          }
+        }
+
+        const skillsVal = responseData.skills || responseData.extracted_skills || responseData.skillsList;
+        if (Array.isArray(skillsVal)) {
+          extractedSkills = skillsVal;
+        } else if (typeof skillsVal === "string") {
+          extractedSkills = skillsVal.split(",").map((s: string) => s.trim()).filter(Boolean);
+        }
+
+        if (responseData.name || responseData.fullName) {
+          nameOverride = responseData.name || responseData.fullName;
+        }
+      }
+
+      const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+      setResumeFile({ name: file.name, size: `${sizeInMB} MB` });
+      setChecklist((prev) => ({ ...prev, resume: true }));
+      setSkillsList(extractedSkills);
+
+      if (nameOverride) {
+        setProfileForm((prev) => ({ ...prev, fullName: nameOverride }));
+      }
+
+      // Step 2 Complete -> Transition to Step 3: ATS Evaluation
+      setPipelineStatus({
+        step: "scoring",
+        progress: 75,
+        details: "Auditing document ATS scoring compatibility matrices...",
+        isFallback: false,
+      });
+      await delay(1200);
+
+      setChecklist((prev) => ({ ...prev, atsAudit: true }));
+
+      // Step 3 Complete -> Transition to Step 4: Finding matched jobs
+      setPipelineStatus({
+        step: "matching",
+        progress: 90,
+        details: "Scanning live databases for internship & entry-level roles...",
+        isFallback: false,
+      });
+
+      // Scrape matched jobs
+      setIsScraping(true);
+      await delay(1200);
+
+      setJobsList((prev) => [
+        {
+          id: `job-scraped-${Date.now()}`,
+          title: "UI Engineer (Entry Level)",
+          company: "Apple Inc.",
+          location: "Cupertino, CA",
+          salary: "$125k/yr",
+          score: 91,
+          type: "Frontend",
+          matchedSkills: ["React", "CSS", "TypeScript"],
+          missingSkills: ["SwiftUI"],
+        },
+        {
+          id: `job-scraped-2-${Date.now()}`,
+          title: "Fullstack Developer Intern",
+          company: "Amazon",
+          location: "Seattle, WA",
+          salary: "$50/hr",
+          score: 82,
+          type: "Fullstack",
+          matchedSkills: ["React", "SQL"],
+          missingSkills: ["AWS", "Node.js"],
+        },
+        ...prev,
+      ]);
+      setChecklist((prev) => ({ ...prev, matchJobs: true }));
+      setIsScraping(false);
+
+      // Step 4 Complete
+      setPipelineStatus({
+        step: "complete",
+        progress: 100,
+        details: "Parsing completed. Successfully matched Apple & Amazon entry-level roles!",
+        isFallback: false,
+      });
+
+      toast.success("Resume parsed successfully!", {
+        id: uploadToastId,
+        description: "Successfully processed by Railway n8n nodes.",
+      });
+
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      console.error("Upload error:", err);
+
+      let cleanErrorMessage = err.message || "Resume upload failed. Please try again.";
+      if (err.name === "AbortError") {
+        cleanErrorMessage = "Network timeout. n8n workflow took too long to respond (>25s).";
+      }
+
+      toast.info("Activating local simulator fallback...", {
+        id: uploadToastId,
+        description: "Executing offline fallback pipeline so you are not blocked.",
+      });
+
+      // Sequential progress simulation for fallbacks!
+      // Step 1: Complete analyzing via local fallback
+      setPipelineStatus({
+        step: "extracting",
+        progress: 40,
+        details: `Live webhook connection failed. Activating local AI simulator...`,
+        isFallback: true,
+      });
+      await delay(1500);
+
+      // Step 2: Extraction
+      setPipelineStatus({
+        step: "extracting",
+        progress: 55,
+        details: "Local Simulation: Parsing tech stack tags...",
+        isFallback: true,
+      });
+      setSkillsList(["React", "CSS", "TypeScript", "Tailwind"]);
+      await delay(1200);
+
+      // Step 3: ATS Score Evaluation
+      setPipelineStatus({
+        step: "scoring",
+        progress: 75,
+        details: "Local Simulation: Auditing compatibility ranking...",
+        isFallback: true,
+      });
+      const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+      setResumeFile({ name: file.name, size: `${sizeInMB} MB` });
+      setChecklist((prev) => ({ ...prev, resume: true, atsAudit: true }));
+      setN8nResponse({
+        error: `Webhook returned error: ${cleanErrorMessage}`,
+        message: "Failed to process via live Railway webhook. Local simulation fallback activated.",
+        fallbackActive: true,
+        schemaSuggestion: "Please verify your n8n workflow active status, input parameter mappings, or database connection inside Railway logs."
+      });
+      await delay(1200);
+
+      // Step 4: Finding Jobs
+      setPipelineStatus({
+        step: "matching",
+        progress: 90,
+        details: "Local Simulation: Scanning live matching entries...",
+        isFallback: true,
+      });
+      setIsScraping(true);
+      await delay(1200);
+
+      setJobsList((prev) => [
+        {
+          id: `job-scraped-${Date.now()}`,
+          title: "UI Engineer (Entry Level)",
+          company: "Apple Inc.",
+          location: "Cupertino, CA",
+          salary: "$125k/yr",
+          score: 91,
+          type: "Frontend",
+          matchedSkills: ["React", "CSS", "TypeScript"],
+          missingSkills: ["SwiftUI"],
+        },
+        {
+          id: `job-scraped-2-${Date.now()}`,
+          title: "Fullstack Developer Intern",
+          company: "Amazon",
+          location: "Seattle, WA",
+          salary: "$50/hr",
+          score: 82,
+          type: "Fullstack",
+          matchedSkills: ["React", "SQL"],
+          missingSkills: ["AWS", "Node.js"],
+        },
+        ...prev,
+      ]);
+      setChecklist((prev) => ({ ...prev, matchJobs: true }));
+      setIsScraping(false);
+
+      // Finalize
+      setPipelineStatus({
+        step: "complete",
+        progress: 100,
+        details: "Local simulation completed. Matched Apple & Amazon entry-level roles successfully!",
+        isFallback: true,
+      });
+
+      toast.error(cleanErrorMessage, {
+        description: `Live webhook failed. Local simulation fallback activated so you are not blocked.`,
+      });
+    }
+  };
+
+  // Handle checklist step completes
+  const handleStepToggle = (stepKey: "resume" | "atsAudit" | "matchJobs" | "applyRoles") => {
+    setChecklist((prev) => {
+      const next = { ...prev, [stepKey]: !prev[stepKey] };
+
+      if (stepKey === "resume") {
+        if (resumeFile) {
+          setResumeFile(null);
+          setSkillsList([]);
+          toast.info("Resume removed");
+          return { ...prev, resume: false, atsAudit: false };
+        } else {
+          fileInputRef.current?.click();
+          return prev; // Toggling is handled by handleFileChange
+        }
+      } else if (stepKey === "atsAudit") {
+        if (next.atsAudit) {
+          if (!resumeFile) {
+            toast.warning("Upload a resume first!", {
+              description: "Please upload a Word or Excel resume before running the audit.",
+            });
+            return prev;
+          }
+          toast.success("ATS Audit Evaluation Completed!", {
+            description: "Your compatibility score is 85%",
+          });
+        } else {
+          toast.info("ATS Audit evaluation reset");
+        }
+      } else if (stepKey === "matchJobs") {
+        if (next.matchJobs) {
+          toast.success("Matched Jobs successfully!", {
+            description: "Generated 24 entry-level recommendations",
+          });
+        } else {
+          toast.info("Matched jobs index reset");
+        }
+      } else if (stepKey === "applyRoles") {
+        if (next.applyRoles) {
+          toast.success("Applications sync completed!", {
+            description: "Syncing mock active trackers",
+          });
+        } else {
+          toast.info("Active trackers sync removed");
+        }
+      }
+
+      return next;
+    });
+  };
+
+  // Computed values that animate from 0
+  const jobsMatchedCount = jobsList.length;
+  const savedJobsCount = savedJobsList.length;
+  const appsSentCount = applications.length;
+
+  // Profile Score calculation
+  const hasBaseInfo = profileForm.fullName.length > 0 && skillsList.length >= 3;
+  const profileScore =
+    (hasBaseInfo ? 20 : 0) +
+    (checklist.resume ? 20 : 0) +
+    (checklist.atsAudit ? 20 : 0) +
+    (checklist.matchJobs ? 20 : 0) +
+    (checklist.applyRoles ? 20 : 0);
+
+  const atsScore = checklist.atsAudit ? 85 : 0;
+
+  // Checklist tooltip hover state
+  const [hoveredStep, setHoveredStep] = useState<number | null>(null);
+
+  // Quick Action Modal states
+  const [activeModal, setActiveModal] = useState<"roadmap" | "interview" | "salary" | "linkedin" | "coverletter" | null>(null);
+
+  const handleScrapeTrigger = () => {
+    setIsScraping(true);
+    toast.loading("Scraping live entry-level matching feeds...", { duration: 1800 });
+    setTimeout(() => {
+      setJobsList((prev) => [
+        {
+          id: `job-scraped-${Date.now()}`,
+          title: "UI Engineer (Entry Level)",
+          company: "Apple Inc.",
+          location: "Cupertino, CA",
+          salary: "$125k/yr",
+          score: 91,
+          type: "Frontend",
+          matchedSkills: ["React", "CSS", "TypeScript"],
+          missingSkills: ["SwiftUI"],
+        },
+        {
+          id: `job-scraped-2-${Date.now()}`,
+          title: "Fullstack Developer Intern",
+          company: "Amazon",
+          location: "Seattle, WA",
+          salary: "$50/hr",
+          score: 82,
+          type: "Fullstack",
+          matchedSkills: ["React", "SQL"],
+          missingSkills: ["AWS", "Node.js"],
+        },
+        ...prev,
+      ]);
+      setChecklist((prev) => ({ ...prev, matchJobs: true }));
+      setIsScraping(false);
+      toast.success("Scrape completed! Added Apple and Amazon entry-level roles.");
+    }, 1800);
+  };
+
+  // Applications Tracker Modal states
+  const [showTrackModal, setShowTrackModal] = useState(false);
+  const [newAppForm, setNewAppForm] = useState({
+    company: "",
+    role: "",
+    status: "Applied",
+    salary: "",
+    date: "2026-06-01",
+    notes: "",
+  });
+  const [showAppsBanner, setShowAppsBanner] = useState(true);
+
+  // Profile Save Form states
+  const [showRequiredErrors, setShowRequiredErrors] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [skillInput, setSkillInput] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  // ATS ring color transition: gold→green color transition as score increases
+  const getAtsColor = (score: number) => {
+    if (score > 70) return "#10b981"; // sage green
+    if (score >= 40) return "#8b5cf6"; // rich gold
+    return "#ef4444"; // terra cotta (red)
+  };
+
+  const activeTabItemsClass = (tabId: string) => {
+    return activeTab === tabId
+      ? "bg-[#8b5cf6]/15 text-[#3b82f6] border-l-[3px] border-l-[#8b5cf6] font-bold"
+      : "text-slate-400 hover:text-[#3b82f6] hover:bg-[#8b5cf6]/5 border-l-[3px] border-l-transparent hover:border-l-[#8b5cf6]/50 transition-all";
+  };
+
+  // Profile input change triggers
+  const handleProfileFieldChange = (key: string, val: string) => {
+    setProfileForm((prev) => ({ ...prev, [key]: val }));
+  };
+
+  const handleSaveProfileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profileForm.fullName || !profileForm.targetJobTitle || !profileForm.targetCityState) {
+      setShowRequiredErrors(true);
+      toast.error("Required fields missing", {
+        description: "Please check red glowing outline inputs.",
+      });
+      return;
+    }
+
+    setShowRequiredErrors(false);
+    setIsSavingProfile(true);
+
+    const success = await updateProfile({
+      full_name: profileForm.fullName,
+      experience_level: profileForm.experienceLevel,
+      job_type: profileForm.preferredJobType,
+      preferred_role: profileForm.targetJobTitle,
+      preferred_location: profileForm.targetCityState,
+      skills: skillsList.join(","),
+    });
+
+    setIsSavingProfile(false);
+    if (success) {
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    }
+  };
+
+  const handleSkillKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = skillInput.trim();
+      if (val && !skillsList.includes(val)) {
+        setSkillsList((prev) => [...prev, val]);
+        setSkillInput("");
+        toast.success(`Added skill tag: ${val}`);
+      }
+    }
+  };
+
+  const handleRemoveSkill = (index: number) => {
+    const val = skillsList[index];
+    setSkillsList((prev) => prev.filter((_, i) => i !== index));
+    toast.info(`Removed skill tag: ${val}`);
+  };
+
+  // Add tracked application manually
+  const handleAddApplication = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAppForm.company || !newAppForm.role) {
+      toast.error("Required fields empty", { description: "Please provide Company and Role." });
+      return;
+    }
+
+    const app = {
+      id: `app-custom-${Date.now()}`,
+      company: newAppForm.company,
+      role: newAppForm.role,
+      status: newAppForm.status,
+      salary: newAppForm.salary || "$90k/yr",
+      date: newAppForm.date || "2026-06-01",
+      notes: newAppForm.notes,
+    };
+
+    setApplications((prev) => [app, ...prev]);
+    setChecklist((prev) => ({ ...prev, applyRoles: true }));
+    setShowTrackModal(false);
+    setNewAppForm({
+      company: "",
+      role: "",
+      status: "Applied",
+      salary: "",
+      date: "2026-06-01",
+      notes: "",
+    });
+    toast.success(`Successfully tracked application at ${app.company}!`);
+  };
+
+  const handleDeleteApplication = (id: string) => {
+    setApplications((prev) => prev.filter((app) => app.id !== id));
+    toast.info("Application deleted");
+  };
+
+  const handleUpdateAppStatus = (id: string, status: string) => {
+    setApplications((prev) =>
+      prev.map((app) => (app.id === id ? { ...app, status } : app))
+    );
+    toast.success(`Updated application status stage to ${status}`);
+  };
+
+  // Job matching actions
+  const handleSaveJobToggle = (job: any) => {
+    const isSaved = savedJobsList.some((j) => j.id === job.id);
+    if (isSaved) {
+      setSavedJobsList((prev) => prev.filter((j) => j.id !== job.id));
+      toast.info(`Removed ${job.title} from Saved Jobs Vault`);
+    } else {
+      setSavedJobsList((prev) => [...prev, job]);
+      setChecklist((prev) => ({ ...prev, matchJobs: true }));
+      toast.success(`Saved ${job.title} to Saved Jobs Vault!`);
+    }
+  };
+
+  const handleQuickApplyJob = (job: any) => {
+    const isApplied = applications.some((app) => app.company === job.company && app.role === job.title);
+    if (isApplied) {
+      toast.info(`You have already tracked an application at ${job.company}.`);
+      return;
+    }
+
+    const app = {
+      id: `app-scraped-${Date.now()}`,
+      company: job.company,
+      role: job.title,
+      status: "Applied",
+      salary: job.salary,
+      date: "2026-06-01",
+      notes: `Applied quickly via matches. Compatibility Rank: ${job.score}%`,
+    };
+
+    setApplications((prev) => [app, ...prev]);
+    setChecklist((prev) => ({ ...prev, applyRoles: true }));
+    toast.success(`Quick Applied! Tracked in Applications Tracker.`);
+  };
+
+  // Navigation Items Mapping
+  const navItems = [
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "matcher", label: "Job Matcher", icon: Search },
+    { id: "saved", label: "Saved Jobs", icon: Bookmark },
+    { id: "applications", label: "Applications", icon: FileText },
+    { id: "profile", label: "Profile", icon: User },
+  ];
+
+  return (
+    <div className="min-h-screen bg-[#07050f] text-[#f8fafc] flex overflow-hidden dot-mesh-bg bg-noise-overlay transition-colors duration-500 font-sans relative pb-16 md:pb-0">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept=".pdf,.doc,.docx,.xls,.xlsx"
+        className="hidden"
+      />
+      {/* Mesh gradients & gold radial glow spots in corners */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(201,168,76,0.06),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(201,168,76,0.06),transparent_50%)] pointer-events-none" />
+
+      {/* Sidebar Navigation - Hidden on Mobile */}
+      <aside className="hidden md:flex w-64 bg-[#07050f] border-r border-[#8b5cf6]/20 flex flex-col justify-between shrink-0 relative z-30">
+        <div className="p-6 flex-1 flex flex-col">
+          {/* Logo Area */}
+          <div className="flex items-center gap-2.5 mb-10 select-none cursor-pointer" onClick={() => setActiveTab("dashboard")}>
+            <div className="relative">
+              <div className="absolute -inset-1 rounded bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] opacity-60 blur-sm animate-pulse" />
+              <div className="relative rounded bg-slate-900 p-2 border border-white/10 text-[#8b5cf6]">
+                <Sparkles className="h-5 w-5 animate-pulse text-[#8b5cf6]" />
+              </div>
+            </div>
+            <span className="text-md font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6]">
+              AI JobMatcher
+            </span>
+          </div>
+
+          {/* Navigation Links */}
+          <nav className="space-y-1.5 flex-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 text-left relative overflow-hidden group select-none ${activeTabItemsClass(
+                    item.id
+                  )}`}
+                  style={{ minHeight: "48px" }}
+                >
+                  <Icon
+                    className={`h-5 w-5 transition-transform group-hover:scale-110 ${activeTab === item.id ? "text-[#3b82f6]" : "text-slate-400 group-hover:text-[#8b5cf6]"
+                      }`}
+                  />
+                  <span className="font-semibold text-sm">{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* User profile / avatar drawer */}
+        <div className="p-4 border-t border-[#8b5cf6]/20 bg-slate-950/20">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-full bg-primary/15 flex items-center justify-center text-primary font-bold">
-              {profile?.full_name?.charAt(0).toUpperCase() ||
-                user?.email?.charAt(0).toUpperCase() ||
-                "U"}
+            {/* Avatar with rotating gold gradient ring */}
+            <div className="relative w-10 h-10 select-none">
+              <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6] animate-rotate-avatar-ring border border-transparent" />
+              <div className="absolute inset-[2.5px] rounded-full bg-[#07050f] flex items-center justify-center text-sm font-black text-[#8b5cf6]">
+                {profileForm.fullName ? profileForm.fullName.charAt(0) : "R"}
+              </div>
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-foreground">
-                {profile?.full_name || "New Matcher"}
+              <h5 className="text-xs font-bold text-slate-200 truncate select-none">
+                {profileForm.fullName || "Ramya"}
+              </h5>
+              <p className="text-[10px] text-slate-500 truncate select-none">
+                {profileForm.email || "ramya@example.com"}
               </p>
-              <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <button
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              className="w-full flex items-center justify-between rounded-xl border border-slate-200/85 dark:border-slate-800/85 bg-slate-50/50 dark:bg-slate-950/20 px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-350 transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-900 active:scale-95 cursor-pointer shadow-inner"
-              title="Toggle theme"
-            >
-              <div className="flex items-center gap-2">
-                {theme === "dark" ? (
-                  <>
-                    <Moon className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                    <span>Dark Mode</span>
-                  </>
-                ) : (
-                  <>
-                    <Sun className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                    <span>Day Mode</span>
-                  </>
-                )}
-              </div>
-              <div className="h-4 w-7 rounded-full bg-slate-200 dark:bg-slate-800 p-0.5 transition-colors relative flex items-center justify-start dark:justify-end">
-                <div className="h-3 w-3 rounded-full bg-white dark:bg-blue-400 shadow-sm" />
-              </div>
-            </button>
-            <Button
-              variant="outline"
-              onClick={() => signOut()}
-              className="w-full rounded-xl text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs font-bold"
-            >
-              <LogOut className="mr-1.5 h-4 w-4" />
-              Sign Out
-            </Button>
-          </div>
+          <button
+            onClick={() => signOut()}
+            className="w-full mt-3.5 flex items-center gap-2 px-3 py-2.5 rounded-lg text-slate-500 hover:text-[#ef4444] hover:bg-[#ef4444]/10 border border-transparent hover:border-[#ef4444]/20 transition-all duration-300 text-xs font-bold"
+            style={{ minHeight: "48px" }}
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Sign Out</span>
+          </button>
         </div>
       </aside>
 
-      {/* MOBILE SHEETS HEADER */}
-      <div className="md:hidden fixed top-0 left-0 right-0 h-16 border-b border-slate-200/50 dark:border-slate-800/80 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md z-40 flex items-center justify-between px-4">
-        <div className="flex items-center gap-2">
-          <div className="rounded-lg bg-primary p-1.5 text-primary-foreground">
-            <Briefcase className="h-5 w-5" />
+      {/* Main Workspace Frame */}
+      <main className="flex-1 flex flex-col min-h-screen relative overflow-y-auto custom-scrollbar z-20">
+        {/* Global sticky header with Theme switcher */}
+        <header className="flex items-center justify-between border-b border-white/[0.08] bg-slate-950/30 backdrop-blur-md px-6 md:px-8 h-16 sticky top-0 z-40 shrink-0">
+          <div className="flex items-center gap-2 select-none">
+            <h2 className="text-sm font-extrabold text-slate-100 uppercase tracking-widest">
+              {activeTab === "saved"
+                ? "Saved Jobs Vault"
+                : activeTab === "matcher"
+                  ? "AI Job Matcher Feed"
+                  : activeTab === "applications"
+                    ? "Tracked Applications"
+                    : activeTab}
+            </h2>
           </div>
-          <span className="text-base font-bold tracking-tight text-foreground">
-            AI Job<span className="text-primary">Matcher</span>
-          </span>
-        </div>
 
-        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-          <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-9 w-9">
-              <Menu className="h-5 w-5" />
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="left" className="w-64 p-0 bg-white dark:bg-slate-900 border-r border-slate-200/50 dark:border-slate-800/80">
-            <div className="flex h-16 items-center border-b border-slate-200/50 dark:border-slate-800/80 px-6">
-              <span className="text-base font-bold tracking-tight text-foreground">
-                Dashboard Menu
-              </span>
-            </div>
-            <nav className="flex-1 space-y-1.5 p-4">
-              <NavItem tab="dashboard" icon={Layers} label="Dashboard" />
-              <NavItem tab="matcher" icon={Sparkles} label="Job Matcher" />
-              <NavItem tab="assistant" icon={MessageSquare} label="AI Career Assistant" />
-              <NavItem tab="saved" icon={Bookmark} label="Saved Jobs" />
-              <NavItem tab="applications" icon={Briefcase} label="Applications" />
-              <NavItem tab="profile" icon={UserIcon} label="Profile" />
-            </nav>
-            <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200/50 dark:border-slate-800/80 p-4 space-y-3 bg-white/95 dark:bg-slate-900/95">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-full bg-primary/15 flex items-center justify-center text-primary font-bold">
-                  {profile?.full_name?.charAt(0).toUpperCase() ||
-                    user?.email?.charAt(0).toUpperCase() ||
-                    "U"}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-semibold text-foreground">
-                    {profile?.full_name || "New Matcher"}
-                  </p>
-                  <p className="truncate text-[10px] text-muted-foreground">{user?.email}</p>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <button
-                  onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                  className="w-full flex items-center justify-between rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/20 px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-350 transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-900 active:scale-95 cursor-pointer shadow-inner"
-                  title="Toggle theme"
-                >
-                  <div className="flex items-center gap-2">
-                    {theme === "dark" ? (
-                      <>
-                        <Moon className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                        <span>Dark Mode</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sun className="h-3.5 w-3.5 text-orange-500 shrink-0" />
-                        <span>Day Mode</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="h-4 w-7 rounded-full bg-slate-200 dark:bg-slate-800 p-0.5 transition-colors relative flex items-center justify-start dark:justify-end">
-                    <div className="h-3 w-3 rounded-full bg-white dark:bg-blue-400 shadow-sm" />
-                  </div>
-                </button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    signOut();
-                  }}
-                  className="w-full rounded-xl text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive h-9 text-xs font-bold"
-                >
-                  <LogOut className="mr-1.5 h-4 w-4" />
-                  Sign Out
-                </Button>
-              </div>
-            </div>
-          </SheetContent>
-        </Sheet>
-      </div>
+          <div className="flex items-center gap-3">
+          </div>
+        </header>
 
-      {/* MAIN CONTAINER */}
-      <main className="flex-1 min-w-0 overflow-y-auto px-4 md:px-8 py-6 md:py-8 mt-16 md:mt-0">
-        <div className="mx-auto max-w-5xl w-full space-y-8">
-          {/* TAB: DASHBOARD */}
+        {/* Dynamic Tab Switchboard */}
+        <div
+          className={`flex-1 p-6 md:p-8 space-y-8 transition-all duration-700 ease-out transform ${isMounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-[10px]"
+            }`}
+        >
+          {/* TAB 1: DASHBOARD VIEW */}
           {activeTab === "dashboard" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
-              {/* Dynamic Welcome Card */}
-              <div className="flex flex-col md:flex-row justify-between items-start bg-slate-100/60 dark:bg-slate-900/40 border border-slate-200/50 dark:border-slate-800/80 rounded-[32px] p-6 md:p-8 relative overflow-hidden text-left shadow-sm">
-                <div className="absolute top-0 right-0 w-48 h-48 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
-                <div className="space-y-3 flex-1">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[#eff6ff] dark:bg-blue-950/40 border border-blue-200/50 dark:border-blue-900/40 px-3 py-1 text-[11px] font-bold text-[#3b82f6] dark:text-blue-400 shadow-sm">
-                    <span className="text-[12px] opacity-90 leading-none">#</span>
-                    <span>Workspace Active</span>
-                  </span>
-                  <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                    Welcome, <span className="text-[#3b82f6]">{profile?.full_name || "Rahul"}</span> 👋
-                  </h1>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 max-w-xl font-medium leading-relaxed">
-                    Ready to find your next opportunity? Scan your resume, scrape live job boards, and track your applications.
-                  </p>
+            <div className="space-y-8 animate-in fade-in duration-300">
+              {/* Welcome back hero section with integrated Status Checklist */}
+              <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-[#15122e] via-[#0f0d20] to-[#07050f] p-6 md:p-8 border border-[#8b5cf6]/25 shadow-[0_20px_45px_rgba(139,92,246,0.15)] flex flex-col lg:flex-row items-stretch justify-between gap-8 select-none">
+                {/* Hero floating gold + amber dots overlay */}
+                <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-45">
+                  <span className="absolute w-2 h-2 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "8%", top: "25%", animationDelay: "0s" }} />
+                  <span className="absolute w-3.5 h-3.5 bg-[#f59e0b] rounded-full animate-float" style={{ left: "28%", top: "72%", animationDelay: "1.2s" }} />
+                  <span className="absolute w-1.5 h-1.5 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "54%", top: "42%", animationDelay: "2.1s" }} />
+                  <span className="absolute w-2 h-2 bg-[#3b82f6] rounded-full animate-float" style={{ left: "78%", top: "18%", animationDelay: "1.5s" }} />
+                  <span className="absolute w-2.5 h-2.5 bg-[#f59e0b] rounded-full animate-float" style={{ left: "84%", top: "78%", animationDelay: "0.5s" }} />
                 </div>
-                <div className="mt-6 md:mt-0 md:ml-6 w-full md:w-64 shrink-0">
-                  <div className="bg-white/80 dark:bg-slate-950/40 border border-slate-200/40 dark:border-slate-800/40 rounded-[20px] p-4 space-y-2.5 shadow-sm text-xs">
-                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
-                      <span>Resume Status</span>
-                      <span className={userStats?.resume_uploaded ? "font-bold text-emerald-600 dark:text-emerald-400" : "font-bold text-slate-400"}>
-                        {userStats?.resume_uploaded ? "Uploaded ✓" : "Not Uploaded ❌"}
-                      </span>
+
+                <div className="space-y-4 max-w-xl text-center lg:text-left z-10 flex-1 flex flex-col justify-center">
+                  <h1 className="text-2.5xl md:text-4xl font-extrabold text-[#f8fafc] leading-tight shadow-sm" style={{ textShadow: "0 2px 10px rgba(139,92,246,0.2)" }}>
+                    Welcome Back, {profileForm.fullName || "Ramya"}! 👋
+                  </h1>
+
+                  {/* Typewriter phrases container */}
+                  <div className="h-8 flex items-center justify-center lg:justify-start">
+                    <TypewriterEffect
+                      phrases={[
+                        "Your dream role is closer than you think",
+                        "AI is scanning thousands of jobs for you",
+                        "Let's land your next opportunity",
+                      ]}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2">
+                    <button
+                      onClick={() => setActiveTab("matcher")}
+                      className="h-12 px-6 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-sm hover-shimmer shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      Start Job Matching →
+                    </button>
+                    <button
+                      onClick={() => setActiveTab("profile")}
+                      className="h-12 px-6 rounded-xl bg-transparent text-[#f8fafc] font-bold text-sm border border-[#8b5cf6]/30 hover:bg-[#8b5cf6]/10 hover:border-[#8b5cf6]/50 hover:scale-105 active:scale-95 transition-all duration-300 backdrop-blur-sm shadow-[0_0_15px_rgba(139,92,246,0.1)] cursor-pointer"
+                    >
+                      Complete Profile
+                    </button>
+                  </div>
+                </div>
+
+                {/* Checklist & Status Panel Nested Inside Welcome Card */}
+                <div className="w-full lg:w-[28%] shrink-0 bg-slate-950/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 flex flex-col justify-between space-y-4 z-10">
+                  <div className="space-y-3.5">
+                    <div className="flex justify-between items-center select-none gap-2">
+                      <h3 className="text-xs font-black text-slate-100 flex items-center gap-1">
+                        📋 Status Checklist
+                      </h3>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[9px] font-bold text-slate-400">Resume:</span>
+                        {resumeFile ? (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20 flex items-center gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-[#10b981]" />
+                            Uploaded
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-semibold bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20 flex items-center gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-[#ef4444] animate-pulse" />
+                            Missing
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
-                      <span>ATS Match Rank</span>
-                      <span className="font-bold text-primary dark:text-blue-400">
-                        {userStats?.ats_match_rank ? `${userStats.ats_match_rank}%` : "0%"}
-                      </span>
+
+                    {/* Step List */}
+                    <div className="space-y-2">
+                      {[
+                        { key: "resume", label: "Upload Resume", tooltip: "Upload PDF (.pdf), Word (.doc, .docx) or Excel (.xls, .xlsx) resume under 2MB" },
+                        { key: "atsAudit", label: "Run ATS Audit", tooltip: "Evaluate resume keyword compatibility matches" },
+                        { key: "matchJobs", label: "Match Jobs", tooltip: "Query mock jobs index vs your profile skills" },
+                        { key: "applyRoles", label: "Apply to Roles", tooltip: "Log tracked application statuses in list" },
+                      ].map((step, idx) => {
+                        const isDone = (checklist as any)[step.key];
+                        return (
+                          <div
+                            key={step.key}
+                            onClick={() => handleStepToggle(step.key as any)}
+                            onMouseEnter={() => setHoveredStep(idx)}
+                            onMouseLeave={() => setHoveredStep(null)}
+                            className="relative flex items-center justify-between p-2.5 rounded-xl border border-white/5 bg-slate-950/20 hover:bg-white/[0.02] hover:border-white/10 transition-all duration-300 cursor-pointer group"
+                            style={{ minHeight: "40px" }}
+                          >
+                            <div className="flex items-center gap-2">
+                              {isDone ? (
+                                <div className="w-4 h-4 rounded-md border border-[#8b5cf6] bg-[#8b5cf6]/20 flex items-center justify-center">
+                                  <Check className="w-3.5 h-3.5 text-[#8b5cf6]" />
+                                </div>
+                              ) : (
+                                <div className="w-4 h-4 rounded-md border border-white/20 bg-slate-900 flex items-center justify-center relative">
+                                  <span className="w-1 h-1 rounded-full bg-[#f59e0b] animate-pulse-glow" />
+                                </div>
+                              )}
+                              <span className={`text-[11px] font-semibold select-none transition-colors ${isDone ? "text-slate-400 line-through" : "text-slate-200"}`}>
+                                {step.label}
+                              </span>
+                            </div>
+
+                            {/* Floating tooltip */}
+                            {hoveredStep === idx && (
+                              <div className="absolute right-12 top-0 z-20 bg-slate-900/95 backdrop-blur text-white text-[9px] font-bold px-2 py-1 rounded-lg shadow-xl border border-white/10 animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap">
+                                Click to complete step →
+                              </div>
+                            )}
+
+                            <span className="text-[9px] text-slate-500 font-bold group-hover:text-[#8b5cf6] transition-colors">
+                              {isDone ? "Done" : "Pending"}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
-                    <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 font-semibold">
-                      <span>Last Login</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">
-                        {user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : "28/5/2026"}
-                      </span>
+                  </div>
+
+                  {pipelineStatus.step !== "idle" && (
+                    <div className="p-4 rounded-xl bg-slate-900 border border-white/5 space-y-4 animate-in fade-in duration-300 relative overflow-hidden">
+                      {/* Premium glowing indicators */}
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-[#8b5cf6]/5 rounded-full blur-2xl pointer-events-none" />
+
+                      <div className="flex items-center justify-between border-b border-white/[0.06] pb-2.5">
+                        <div className="flex items-center gap-2 select-none">
+                          <Sparkles className="w-3.5 h-3.5 text-[#8b5cf6] animate-pulse" />
+                          <span className="font-extrabold text-[#f8fafc] uppercase tracking-wider text-[9px]">
+                            AI Parsing Pipeline
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 select-none">
+                          <div className="w-20 h-1.5 bg-slate-950 rounded-full overflow-hidden border border-white/5">
+                            <div
+                              className="h-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#10b981] transition-all duration-500 ease-out"
+                              style={{ width: `${pipelineStatus.progress}%` }}
+                            />
+                          </div>
+                          <span className="text-[9px] font-black text-[#8b5cf6]">
+                            {pipelineStatus.progress}%
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Stepper items list */}
+                      <div className="space-y-2 select-none">
+                        <PipelineStepCard
+                          stepNum={1}
+                          title="Analyzing Resume"
+                          description="Validating dimensions, checking file types, packaging FormData payload."
+                          status={
+                            pipelineStatus.step === "analyzing"
+                              ? "active"
+                              : pipelineStatus.step === "failed" && pipelineStatus.progress < 25
+                                ? "failed"
+                                : pipelineStatus.step !== "idle"
+                                  ? "success"
+                                  : "pending"
+                          }
+                        />
+                        <PipelineStepCard
+                          stepNum={2}
+                          title="Skills Extraction"
+                          description="Extracting engineering tags, programming languages, framework keywords."
+                          status={
+                            pipelineStatus.step === "extracting"
+                              ? "active"
+                              : pipelineStatus.step === "analyzing" || pipelineStatus.step === "idle"
+                                ? "pending"
+                                : "success"
+                          }
+                        />
+                        <PipelineStepCard
+                          stepNum={3}
+                          title="ATS Scorer Evaluation"
+                          description="Auditing document ATS scoring compatibility matrices & ranking guidelines."
+                          status={
+                            pipelineStatus.step === "scoring"
+                              ? "active"
+                              : pipelineStatus.step === "matching" || pipelineStatus.step === "complete"
+                                ? "success"
+                                : "pending"
+                          }
+                        />
+                        <PipelineStepCard
+                          stepNum={4}
+                          title="Finding Matched Jobs"
+                          description="Scanning live entry-level database indices for matching opportunities."
+                          status={
+                            pipelineStatus.step === "matching"
+                              ? "active"
+                              : pipelineStatus.step === "complete"
+                                ? "success"
+                                : "pending"
+                          }
+                        />
+                      </div>
+
+                      {/* Pipeline Status Details bar */}
+                      {pipelineStatus.details && (
+                        <div className="flex items-center justify-between text-[8px] font-bold text-slate-400 bg-slate-950/30 px-2.5 py-1.5 rounded-lg border border-white/5 select-none">
+                          <span className="flex items-center gap-1">
+                            {pipelineStatus.step !== "complete" && pipelineStatus.step !== "failed" && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] animate-ping inline-block" />
+                            )}
+                            {pipelineStatus.details}
+                          </span>
+                          {pipelineStatus.isFallback && (
+                            <span className="text-amber-400 font-extrabold tracking-wider uppercase bg-amber-400/10 px-1 py-0.5 rounded border border-amber-400/20 text-[7px] shrink-0">
+                              Fallback Active
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Collapsible raw n8n debug output inside details disclosure */}
+                      {n8nResponse && (
+                        <div className="border-t border-white/[0.04] pt-2">
+                          <details className="group">
+                            <summary className="text-[8px] font-bold text-slate-500 hover:text-slate-350 cursor-pointer list-none flex items-center justify-between select-none">
+                              <span>🔍 Debug: View Raw Webhook Response</span>
+                              <span className="transition-transform group-open:rotate-180">▼</span>
+                            </summary>
+                            <pre className="mt-1.5 p-2 rounded bg-black/40 border border-white/5 font-mono text-[8px] text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-24 custom-scrollbar select-text">
+                              {typeof n8nResponse === "object"
+                                ? JSON.stringify(n8nResponse, null, 2)
+                                : String(n8nResponse)}
+                            </pre>
+                          </details>
+                        </div>
+                      )}
                     </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-3 border-t border-white/[0.04] gap-4">
+                    <div className="flex items-center gap-2.5">
+                      <CircularProgress
+                        value={atsScore}
+                        size={52}
+                        strokeWidth={5}
+                        primaryColor={getAtsColor(atsScore)}
+                        secondaryColor="rgba(255, 255, 255, 0.04)"
+                        fontSize="0.8rem"
+                      />
+                      <div className="flex flex-col select-none">
+                        <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-widest leading-none">
+                          ATS Score
+                        </span>
+                        <span className="text-[10px] text-slate-300 font-bold mt-0.5">
+                          Rating
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-[9px] text-slate-500 font-bold select-none flex items-center gap-1 shrink-0">
+                      <Clock className="w-3.5 h-3.5 text-slate-500" />
+                      Last sync: 2h ago
+                    </span>
                   </div>
                 </div>
               </div>
 
-              {/* Dynamic Stats Grid */}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+
+              {/* Stats Cards grid: snap scroll row on mobile */}
+              <div className="flex overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid md:grid-cols-2 lg:grid-cols-4 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
                 {[
-                  {
-                    title: "JOBS MATCHED",
-                    value: String(userStats?.jobs_matched ?? 0),
-                    icon: Sparkles,
-                    color: "text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-100/50 dark:border-blue-900/20"
-                  },
-                  {
-                    title: "APPLICATIONS SENT",
-                    value: String(userStats?.applications_sent ?? 0),
-                    icon: Briefcase,
-                    color: "text-purple-600 bg-purple-50 dark:bg-purple-950/40 border-purple-100/50 dark:border-purple-900/20"
-                  },
-                  {
-                    title: "SAVED JOBS",
-                    value: String(userStats?.saved_jobs ?? 0),
-                    icon: Bookmark,
-                    color: "text-amber-600 bg-amber-50 dark:bg-amber-950/40 border-amber-100/50 dark:border-amber-900/20"
-                  },
-                  {
-                    title: "PROFILE SCORE",
-                    value: `${userStats?.profile_score ?? 0}%`,
-                    icon: Award,
-                    color: "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-100/50 dark:border-emerald-900/20"
-                  }
-                ].map((metric, idx) => {
-                  const Icon = metric.icon;
+                  { title: "Jobs Matched", value: jobsMatchedCount, icon: Briefcase, color: "text-[#8b5cf6]", iconBorder: "border-[#8b5cf6]/30", glow: "hover:shadow-[0_8px_20px_rgba(139,92,246,0.15)]" },
+                  { title: "Applications Sent", value: appsSentCount, icon: FileText, color: "text-[#6366f1]", iconBorder: "border-[#6366f1]/30", glow: "hover:shadow-[0_8px_20px_rgba(99,102,241,0.15)]" },
+                  { title: "Saved Jobs", value: savedJobsCount, icon: Bookmark, color: "text-[#10b981]", iconBorder: "border-[#10b981]/30", glow: "hover:shadow-[0_8px_20px_rgba(16,185,129,0.15)]" },
+                  { title: "Profile Score", value: profileScore, icon: User, color: "text-[#8b5cf6]", iconBorder: "border-[#8b5cf6]/30", glow: "hover:shadow-[0_8px_20px_rgba(139,92,246,0.15)]", isProfile: true },
+                ].map((stat, i) => (
+                  <div
+                    key={i}
+                    className={`glass-card rounded-2xl p-5 border border-white/5 ${stat.glow} hover:-translate-y-1.5 transition-all duration-300 flex items-center justify-between group shrink-0 w-[85%] snap-center md:w-auto md:shrink`}
+                  >
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest select-none">
+                        {stat.title}
+                      </p>
+                      {!stat.isProfile ? (
+                        <h3 className="text-3xl font-black text-[#f8fafc] leading-none">
+                          <AnimatedCounter value={stat.value} />
+                        </h3>
+                      ) : (
+                        <p className="text-[10px] text-[#10b981] font-semibold select-none flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" />
+                          Live Rating
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-center">
+                      {stat.isProfile ? (
+                        <CircularProgress
+                          value={stat.value}
+                          size={80}
+                          strokeWidth={8}
+                          primaryColor="#8b5cf6"
+                          secondaryColor="rgba(255, 255, 255, 0.05)"
+                          fontSize="1.1rem"
+                        />
+                      ) : (
+                        <div className={`p-3 rounded-xl bg-slate-900 border ${stat.iconBorder} group-hover:scale-110 transition-transform duration-300 ${stat.color}`}>
+                          <stat.icon className="h-6 w-6" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+
+              {/* ⚡ Quick Actions Grid section */}
+              <div className="space-y-4">
+                <div className="relative pb-2 select-none">
+                  <h2 className="text-xl font-extrabold text-white flex items-center gap-2">
+                    ⚡ Quick Actions
+                  </h2>
+                  <div className="absolute bottom-0 left-0 w-32 h-[3.5px] bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] rounded-full shadow-[0_0_8px_#8b5cf6]" />
+                </div>
+
+                {/* 2x2 scroll on mobile, 3x3 on desktop */}
+                <div className="grid grid-rows-2 grid-flow-col overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid-rows-none md:grid-flow-row md:grid-cols-3 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
+                  {[
+                    {
+                      id: "ats",
+                      title: "ATS Audit Analyzer",
+                      subtitle: "Optimize keyword resume scores",
+                      emoji: "📊",
+                      gradient: "from-[#4c1d95] to-[#7c3aed]",
+                      action: () => {
+                        handleStepToggle("atsAudit");
+                      },
+                    },
+                    {
+                      id: "resume",
+                      title: "Resume Parser",
+                      subtitle: "Extract skill tags from Word/Excel",
+                      emoji: "📄",
+                      gradient: "from-[#1e3a8a] to-[#3b82f6]",
+                      action: () => {
+                        handleStepToggle("resume");
+                      },
+                    },
+                    {
+                      id: "gap",
+                      title: "Skill Gap Advisor",
+                      subtitle: "Find missing tech profile tools",
+                      emoji: "🧩",
+                      gradient: "from-[#311042] to-[#6366f1]",
+                      action: () => {
+                        setActiveTab("profile");
+                        toast.info("Scroll down on the profile page to add missing skill tags!");
+                      },
+                    },
+                    {
+                      id: "roadmap",
+                      title: "Career Path Roadmap",
+                      subtitle: "Interactive developer milestones",
+                      emoji: "🗺️",
+                      gradient: "from-[#064e3b] to-[#10b981]",
+                      action: () => setActiveModal("roadmap"),
+                    },
+                    {
+                      id: "interview",
+                      title: "Interview Simulator",
+                      subtitle: "Simulated tech questionnaire prep",
+                      emoji: "🎙️",
+                      gradient: "from-[#7c2d12] to-[#fb923c]",
+                      action: () => setActiveModal("interview"),
+                    },
+                    {
+                      id: "salary",
+                      title: "Salary Insights Tracker",
+                      subtitle: "Evaluate market junior rates",
+                      emoji: "💰",
+                      gradient: "from-[#115e59] to-[#14b8a6]",
+                      action: () => setActiveModal("salary"),
+                    },
+                    {
+                      id: "linkedin",
+                      title: "LinkedIn Optimizer",
+                      subtitle: "Enhance keyword recruiter search",
+                      emoji: "💼",
+                      gradient: "from-[#1e3a8a] to-[#2563eb]",
+                      action: () => setActiveModal("linkedin"),
+                    },
+                    {
+                      id: "coverletter",
+                      title: "Cover Letter Builder",
+                      subtitle: "AI formatted custom letters",
+                      emoji: "✍️",
+                      gradient: "from-[#831843] to-[#ec4899]",
+                      action: () => setActiveModal("coverletter"),
+                    },
+                    {
+                      id: "jobs",
+                      title: "Scrape Jobs Feed",
+                      subtitle: "Query live online listing scrapes",
+                      emoji: "🎯",
+                      gradient: "from-[#14532d] to-[#22c55e]",
+                      action: () => {
+                        setActiveTab("matcher");
+                        if (resumeFile) {
+                          handleScrapeTrigger();
+                        } else {
+                          setTimeout(() => {
+                            fileInputRef.current?.click();
+                          }, 100);
+                        }
+                      },
+                    },
+                  ].map((card) => (
+                    <QuickActionCard
+                      key={card.id}
+                      title={card.title}
+                      subtitle={card.subtitle}
+                      emoji={card.emoji}
+                      gradientClass={card.gradient}
+                      onClick={card.action}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: JOB MATCHER */}
+          {activeTab === "matcher" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {pipelineStatus.step === "idle" ? (
+                <div className="space-y-6">
+                  <div className="space-y-1.5 select-none">
+                    <h3 className="text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Resume Matcher</h3>
+                    <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                      Upload your resume to extract skills, calculate an ATS match score, and scrape live entry-level jobs tailored to your skillset.
+                    </p>
+                  </div>
+
+                  <div className="max-w-3xl mx-auto w-full glass-card rounded-3xl p-6 border border-white/5 shadow-[0_20px_50px_rgba(139,92,246,0.12)] bg-[#0f0d20]/80 backdrop-blur-xl space-y-6 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-[#3b82f6]/5 rounded-full blur-3xl pointer-events-none" />
+
+                    {/* Free Trial Banner */}
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3.5 rounded-xl border border-[#3b82f6]/20 bg-[#3b82f6]/5 select-none gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="p-1.5 rounded bg-[#3b82f6]/10 text-[#3b82f6]">
+                          <Sparkles className="w-4 h-4" />
+                        </div>
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-black text-slate-200">Free Trial Usage</span>
+                          <p className="text-[10px] text-slate-400 font-medium">You get 3 free resume matches per account.</p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-black text-slate-300 whitespace-nowrap shrink-0">
+                        <span className="text-[#3b82f6] text-sm font-bold">{matchesRemaining}</span> / 3 remaining
+                      </span>
+                    </div>
+
+                    {/* Drag and Drop Box */}
+                    <div
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`border-2 border-dashed rounded-2xl py-16 px-10 flex flex-col items-center justify-center gap-5 transition-all duration-300 cursor-pointer select-none group relative overflow-hidden ${isDragging
+                          ? "border-[#3b82f6] bg-[#3b82f6]/10 scale-[1.01] shadow-[0_0_20px_rgba(59,130,246,0.15)]"
+                          : "border-white/10 bg-slate-950/20 hover:border-[#8b5cf6]/30 hover:bg-white/[0.01]"
+                        }`}
+                    >
+                      <div className="w-18 h-18 rounded-full bg-[#3b82f6]/10 border border-[#3b82f6]/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
+                        <Upload className="w-7 h-7 text-[#3b82f6]" />
+                      </div>
+                      <div className="text-center space-y-2">
+                        <p className="text-sm font-black text-slate-200 md:text-base group-hover:text-[#3b82f6] transition-colors">
+                          Drag & drop your resume here
+                        </p>
+                        <p className="text-[11px] md:text-xs text-slate-500 font-bold">
+                          or click to browse from files (PDF, DOC, DOCX)
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Staged File block */}
+                    {stagedFile && (
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-white/5 animate-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-8 h-8 rounded-lg bg-[#3b82f6]/10 border border-[#3b82f6]/20 flex items-center justify-center text-[#3b82f6] shrink-0">
+                            <FileText className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-200 truncate leading-none">
+                              {stagedFile.name}
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-bold mt-1 select-none">
+                              {(stagedFile.size / 1024).toFixed(1)} KB
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setStagedFile(null);
+                            toast.info("Resume unstaged");
+                          }}
+                          className="text-xs font-bold text-slate-400 hover:text-red-400 cursor-pointer flex items-center gap-1 bg-white/5 hover:bg-red-500/10 px-2.5 py-1.5 rounded-lg border border-white/5 hover:border-red-500/20 transition-all duration-300 shrink-0 select-none"
+                        >
+                          ✕ Remove
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Analyze Action Button */}
+                    <button
+                      onClick={() => startAnalysis(stagedFile!)}
+                      disabled={!stagedFile}
+                      className={`w-full h-12 rounded-xl text-white font-bold text-xs hover-shimmer shadow-lg flex items-center justify-center gap-2 transition-all duration-300 ${stagedFile
+                          ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
+                          : "bg-white/5 border border-white/5 text-slate-500 cursor-not-allowed"
+                        }`}
+                      style={{ minHeight: "48px" }}
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      Analyze & Find Matches
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1.5 select-none">
+                  <h3 className="text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Live Job Matcher Index</h3>
+                  <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                    Analyzing resume, extracting engineering attributes, and auditing roles.
+                  </p>
+                </div>
+              )}
+
+              {pipelineStatus.step !== "idle" && (
+                <div className="glass-card rounded-2xl p-6 border border-white/5 space-y-6 animate-in fade-in duration-300 relative overflow-hidden">
+                  {/* Glowing halo */}
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-[#8b5cf6]/5 rounded-full blur-3xl pointer-events-none" />
+                  <div className="absolute bottom-0 left-0 w-32 h-32 bg-[#3b82f6]/5 rounded-full blur-3xl pointer-events-none" />
+
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-white/[0.06] pb-4">
+                    <div>
+                      <h4 className="text-sm font-black text-white flex items-center gap-2 select-none">
+                        <Sparkles className="w-4 h-4 text-[#8b5cf6] animate-pulse" />
+                        AI Parsing Pipeline
+                      </h4>
+                      <p className="text-[10px] text-slate-400 mt-1 select-none">
+                        Analyzing resume format, extracting tech stack tags, and auditing ATS score relevance.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3 w-full sm:w-auto shrink-0 select-none">
+                      <div className="flex-1 sm:w-36 h-2 bg-slate-950 rounded-full overflow-hidden border border-white/5">
+                        <div
+                          className="h-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#10b981] transition-all duration-500 ease-out"
+                          style={{ width: `${pipelineStatus.progress}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-black text-[#8b5cf6] min-w-[32px] text-right">
+                        {pipelineStatus.progress}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Steps Grid */}
+                  <div className="grid gap-4 md:grid-cols-4 select-none">
+                    <PipelineStepCard
+                      stepNum={1}
+                      title="Analyzing Resume"
+                      description="Validating file format and size under 2MB, transmitting payload to n8n Railway webhook."
+                      status={
+                        pipelineStatus.step === "analyzing"
+                          ? "active"
+                          : pipelineStatus.step === "failed" && pipelineStatus.progress < 25
+                            ? "failed"
+                            : pipelineStatus.step !== "idle"
+                              ? "success"
+                              : "pending"
+                      }
+                    />
+                    <PipelineStepCard
+                      stepNum={2}
+                      title="Skills Extraction"
+                      description="Extracting technical skills, programming languages, and frame/library keyword tags."
+                      status={
+                        pipelineStatus.step === "extracting"
+                          ? "active"
+                          : pipelineStatus.step === "analyzing" || pipelineStatus.step === "idle"
+                            ? "pending"
+                            : "success"
+                      }
+                    />
+                    <PipelineStepCard
+                      stepNum={3}
+                      title="ATS Scorer Evaluation"
+                      description="Auditing keyword relevance score and compatibility rankings against job targets."
+                      status={
+                        pipelineStatus.step === "scoring"
+                          ? "active"
+                          : pipelineStatus.step === "matching" || pipelineStatus.step === "complete"
+                            ? "success"
+                            : "pending"
+                      }
+                    />
+                    <PipelineStepCard
+                      stepNum={4}
+                      title="Finding Matched Jobs"
+                      description="Scanning live database opportunities and matching customized tech stack openings."
+                      status={
+                        pipelineStatus.step === "matching"
+                          ? "active"
+                          : pipelineStatus.step === "complete"
+                            ? "success"
+                            : "pending"
+                      }
+                    />
+                  </div>
+
+                  {/* Status Bar */}
+                  {pipelineStatus.details && (
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-400 bg-slate-950/40 px-4 py-2.5 rounded-xl border border-white/5 select-none">
+                      <span className="flex items-center gap-2">
+                        {pipelineStatus.step !== "complete" && pipelineStatus.step !== "failed" && (
+                          <span className="w-2 h-2 rounded-full bg-[#8b5cf6] animate-ping" />
+                        )}
+                        {pipelineStatus.details}
+                      </span>
+                      {pipelineStatus.isFallback && (
+                        <span className="text-amber-400 font-extrabold tracking-wider uppercase bg-amber-400/10 px-2.5 py-0.5 rounded border border-amber-400/20 text-[9px] shrink-0">
+                          Fallback Active
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Reset button shown upon completion */}
+                  {pipelineStatus.step === "complete" && (
+                    <button
+                      onClick={() => {
+                        setPipelineStatus({ step: "idle", progress: 0, isFallback: false });
+                        setResumeFile(null);
+                        setChecklist((prev) => ({ ...prev, resume: false, atsAudit: false, matchJobs: false }));
+                        setJobsList([]);
+                        setN8nResponse(null);
+                      }}
+                      className="w-full h-10 rounded-xl bg-white/5 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all duration-300 cursor-pointer select-none"
+                    >
+                      <Upload className="w-4 h-4" />
+                      Reset Parser & Upload New Resume
+                    </button>
+                  )}
+
+                  {/* Debug collapsable */}
+                  {n8nResponse && (
+                    <div className="border-t border-white/[0.04] pt-3 select-text">
+                      <details className="group">
+                        <summary className="text-[10px] font-bold text-slate-500 hover:text-slate-350 cursor-pointer list-none flex items-center justify-between select-none">
+                          <span>🔍 Debug: View Raw Webhook Response</span>
+                          <span className="transition-transform group-open:rotate-180">▼</span>
+                        </summary>
+                        <pre className="mt-2 p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-36 custom-scrollbar">
+                          {typeof n8nResponse === "object"
+                            ? JSON.stringify(n8nResponse, null, 2)
+                            : String(n8nResponse)}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Filter controls */}
+              <div className="glass-card rounded-2xl p-4 border border-white/5 flex flex-col md:flex-row items-center gap-4">
+                <div className="relative flex-1 w-full">
+                  <Search className="absolute left-3 top-4 h-4 w-4 text-slate-500" />
+                  <Input
+                    placeholder="Search company or title keywords..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10 h-12 w-full bg-slate-900 border-white/10 text-xs rounded-xl focus:ring-2 focus:ring-[#8b5cf6]/20"
+                  />
+                </div>
+                <div className="flex items-center gap-3 w-full md:w-auto shrink-0 overflow-x-auto custom-scrollbar pb-1 md:pb-0">
+                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap select-none">Role Style:</span>
+                  {["All", "Frontend", "Backend", "Fullstack"].map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => setSelectedRoleType(type)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedRoleType === type
+                          ? "bg-[#8b5cf6] text-white shadow-sm"
+                          : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Matched list */}
+              {isScraping ? (
+                <div className="py-20 flex flex-col items-center justify-center space-y-4 select-none">
+                  <div className="relative w-36 h-36 flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-full border border-[#8b5cf6]/10 animate-ping" />
+                    <svg className="w-full h-full absolute inset-0 transform -rotate-90 animate-spin" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth="3" />
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="#8b5cf6" strokeWidth="4" strokeDasharray="250" strokeDashoffset="120" />
+                    </svg>
+                    <Search className="w-8 h-8 text-[#8b5cf6] animate-bounce" />
+                  </div>
+                  <h4 className="text-sm font-bold text-white">Aggregating live API feeds...</h4>
+                  <p className="text-xs text-slate-500">Connecting via n8n scrape worker nodes</p>
+                </div>
+              ) : jobsList.length === 0 ? (
+                <div className="py-12 flex flex-col items-center justify-center space-y-3 border border-white/5 rounded-2xl bg-slate-950/20 select-none animate-in fade-in max-w-xl mx-auto">
+                  <div className="w-12 h-12 rounded-full bg-slate-900 border border-white/5 flex items-center justify-center text-slate-500">
+                    <Briefcase className="w-5 h-5" />
+                  </div>
+                  <div className="text-center space-y-1">
+                    <h4 className="text-sm font-bold text-slate-300">Awaiting Resume Match</h4>
+                    <p className="text-xs text-slate-500 max-w-xs px-4">
+                      Stage and analyze your PDF, Word or Excel resume above to scan live matching openings against your technical skills list.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {jobsList
+                    .filter((job) => {
+                      const matchesKeyword =
+                        job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                        job.company.toLowerCase().includes(searchQuery.toLowerCase());
+                      const matchesType = selectedRoleType === "All" || job.type === selectedRoleType;
+                      return matchesKeyword && matchesType;
+                    })
+                    .map((job) => {
+                      const isSaved = savedJobsList.some((j) => j.id === job.id);
+                      return (
+                        <div
+                          key={job.id}
+                          className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 flex flex-col justify-between space-y-4"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-11 h-11 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-lg font-black text-[#8b5cf6] select-none">
+                                {job.company.charAt(0)}
+                              </div>
+                              <div>
+                                <h4 className="font-extrabold text-white text-sm tracking-tight">{job.title}</h4>
+                                <p className="text-[11px] font-bold text-slate-400 select-none">{job.company}</p>
+                              </div>
+                            </div>
+
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold shadow-sm flex items-center gap-1 select-none border bg-[#8b5cf6]/10 text-[#3b82f6] border-[#8b5cf6]/20`}
+                            >
+                              ⚡ {job.score}% match
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-4 text-xs select-none">
+                            <div className="flex items-center gap-1 text-slate-400">
+                              <MapPin className="w-3.5 h-3.5 text-slate-500" />
+                              <span>{job.location}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-slate-400">
+                              <DollarSign className="w-3.5 h-3.5 text-slate-500" />
+                              <span>{job.salary}</span>
+                            </div>
+                          </div>
+
+                          {/* Skill verification */}
+                          <div className="space-y-1.5 select-none">
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Extracted Validation</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {job.matchedSkills.map((s: string, idx: number) => (
+                                <span
+                                  key={idx}
+                                  className="px-2 py-0.5 rounded bg-[#8b5cf6]/15 border border-[#8b5cf6]/25 text-[9px] font-extrabold text-[#3b82f6]"
+                                >
+                                  {s}
+                                </span>
+                              ))}
+                              {job.missingSkills.map((s: string, idx: number) => (
+                                <span
+                                  key={idx}
+                                  className="px-2 py-0.5 rounded bg-[#ef4444]/15 border border-[#ef4444]/25 text-[9px] font-extrabold text-[#ef4444] animate-pulse"
+                                  title="Skill gap identified"
+                                >
+                                  {s} ✕
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 pt-3 border-t border-white/[0.04]">
+                            <button
+                              onClick={() => handleSaveJobToggle(job)}
+                              className={`p-2.5 rounded-xl border transition-all duration-300 ${isSaved
+                                  ? "bg-[#8b5cf6]/20 border-[#8b5cf6]/30 text-[#3b82f6]"
+                                  : "bg-white/5 border-white/[0.08] hover:bg-white/10 text-slate-400 hover:text-white"
+                                }`}
+                              style={{ minHeight: "48px", minWidth: "48px" }}
+                              title={isSaved ? "Saved" : "Save Job"}
+                            >
+                              <Bookmark className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleQuickApplyJob(job)}
+                              className="flex-1 h-12 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white text-xs font-bold hover-shimmer shadow-sm active:scale-95 transition-transform cursor-pointer"
+                            >
+                              Quick Apply
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: SAVED JOBS */}
+          {activeTab === "saved" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              <div className="space-y-1 select-none">
+                <h3 className="text-xl font-bold text-white">Your Bookmarks</h3>
+                <p className="text-xs text-slate-400">Review jobs bookmarked from matches.</p>
+              </div>
+
+              {savedJobsList.length === 0 ? (
+                <div className="py-20 flex flex-col items-center justify-center space-y-4 border border-dashed border-white/10 rounded-3xl bg-slate-950/20 select-none animate-in fade-in">
+                  <Bookmark className="w-12 h-12 text-[#8b5cf6]/40" />
+                  <div className="text-center space-y-1">
+                    <h4 className="font-bold text-slate-300">Bookmarks Vault Empty</h4>
+                    <p className="text-xs text-slate-500">Go to Job Matcher index to save exciting jobs.</p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("matcher")}
+                    className="h-12 px-6 rounded-xl bg-[#8b5cf6] hover:bg-[#8b5cf6]/90 text-white font-bold text-xs shadow cursor-pointer"
+                  >
+                    Match New Roles
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {savedJobsList.map((job) => (
+                    <div
+                      key={job.id}
+                      className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 hover:shadow-xl transition-all duration-300 flex flex-col justify-between space-y-4"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center text-sm font-black text-[#8b5cf6]">
+                            {job.company.charAt(0)}
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold text-white text-xs tracking-tight">{job.title}</h4>
+                            <p className="text-[10px] text-slate-400 font-bold select-none">{job.company}</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleSaveJobToggle(job)}
+                          className="text-slate-500 hover:text-[#ef4444] p-1.5 rounded-lg hover:bg-white/5"
+                          title="Remove bookmark"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 select-none">
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3 h-3 text-slate-500" /> {job.location}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <DollarSign className="w-3 h-3 text-slate-500" /> {job.salary}
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={() => handleQuickApplyJob(job)}
+                        className="w-full h-12 rounded-xl bg-[#8b5cf6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
+                      >
+                        Quick Apply
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 4: APPLICATIONS TRACKER */}
+          {activeTab === "applications" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* Tracker Banner */}
+              {showAppsBanner && (
+                <div className="relative glass-card rounded-2xl p-5 border border-white/5 border-l-4 border-l-[#8b5cf6] overflow-hidden flex justify-between items-start animate-in fade-in duration-300">
+                  <div className="space-y-2 select-none">
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      📋 What is the Applications Tracker?
+                    </h3>
+                    <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
+                      Track every job application from submission to offer. Never miss a follow-up, stay organized, and see your progress at a glance.
+                    </p>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <span className="text-[10px] font-bold text-[#8b5cf6] bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 px-2.5 py-1 rounded-full">
+                        🎯 Track Status
+                      </span>
+                      <span className="text-[10px] font-bold text-[#6366f1] bg-[#6366f1]/10 border border-[#6366f1]/20 px-2.5 py-1 rounded-full">
+                        📅 Set Reminders
+                      </span>
+                      <span className="text-[10px] font-bold text-[#10b981] bg-[#10b981]/10 border border-[#10b981]/20 px-2.5 py-1 rounded-full">
+                        📈 View Progress
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowAppsBanner(false)}
+                    className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                  >
+                    <X className="h-4.5 w-4.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Status Counter Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                {[
+                  { id: "Applied", label: "Applied", color: "text-[#8b5cf6]", borderColor: "border-b-[#8b5cf6]" },
+                  { id: "Under Review", label: "Under Review", color: "text-[#6366f1]", borderColor: "border-b-[#6366f1]" },
+                  { id: "Interview", label: "Interview", color: "text-[#f59e0b]", borderColor: "border-b-[#f59e0b]" },
+                  { id: "Rejected", label: "Rejected", color: "text-[#ef4444]", borderColor: "border-b-[#ef4444]" },
+                  { id: "Offer", label: "Offer", color: "text-[#10b981]", borderColor: "border-b-[#10b981]" },
+                ].map((status) => {
+                  const count = applications.filter((app) => app.status === status.id).length;
                   return (
-                    <Card key={idx} className="p-4 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm text-left flex items-center gap-4 rounded-[24px] transition-all duration-300 hover:scale-[1.02] hover:shadow-md cursor-default">
-                      <div className={["h-12 w-12 rounded-full flex items-center justify-center shrink-0 border shadow-inner", metric.color].join(" ")}>
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <div className="space-y-0.5 min-w-0">
-                        <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">{metric.title}</span>
-                        <span className="text-2xl font-black text-slate-800 dark:text-white block leading-none">{metric.value}</span>
-                      </div>
-                    </Card>
+                    <div
+                      key={status.id}
+                      className={`glass-card p-4 rounded-xl border border-white/5 border-b-4 ${status.borderColor} text-center space-y-1 select-none`}
+                    >
+                      <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">
+                        {status.label}
+                      </p>
+                      <h4 className="text-2xl font-black text-white">
+                        <AnimatedCounter value={count} />
+                      </h4>
+                    </div>
                   );
                 })}
               </div>
 
-              {/* Two Column Grid Layout */}
-              <div className="grid gap-6 md:grid-cols-3">
-                {/* Recent Scrape Matches */}
-                <div className="md:col-span-2">
-                  <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left flex flex-col justify-between h-full min-h-[300px]">
-                    <div>
-                      <h3 className="font-extrabold text-slate-850 dark:text-white text-base mb-6">Recent Scrape Matches</h3>
+              {/* Track CTA */}
+              <div className="flex items-center justify-between pt-2">
+                <h4 className="text-sm font-bold text-slate-300 select-none">Active Trackers</h4>
+                <button
+                  onClick={() => setShowTrackModal(true)}
+                  className="h-12 px-4 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-xs shadow-md hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  Track New Job
+                </button>
+              </div>
 
-                      {jobs.length === 0 ? (
-                        <div className="py-12 text-center text-xs text-slate-450 dark:text-slate-500 italic font-medium leading-relaxed max-w-sm mx-auto">
-                          No matches found yet. Go to the "Job Matcher" to upload your resume!
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {jobs.slice(0, 3).map((job, idx) => (
-                            <div key={idx} className="flex items-center justify-between p-3 rounded-2xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20">
-                              <div className="min-w-0 flex-1">
-                                <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block truncate">{job.title}</span>
-                                <span className="text-[10px] text-slate-450 dark:text-slate-500 font-semibold">{job.company} • {job.location || "Remote"}</span>
-                              </div>
-                              <Badge className="font-extrabold text-[9px] px-2 py-0.5 rounded-lg shrink-0 bg-primary/10 text-primary border-primary/20" variant="outline">
-                                {job.score}
-                              </Badge>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+              {/* Applications Content Block */}
+              {applications.length === 0 ? (
+                <div className="space-y-6 pt-4">
+                  {/* 3-Step Guide */}
+                  <div className="glass-card rounded-2xl p-6 border border-white/5 space-y-4 max-w-xl mx-auto text-center">
+                    <h4 className="text-xs font-extrabold text-white tracking-widest uppercase select-none">
+                      Tracker Setup Guide
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 text-xs select-none">
+                      <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex flex-col justify-center items-center space-y-1">
+                        <span className="text-xl">1️⃣</span>
+                        <span className="font-semibold text-slate-200">Track New Job</span>
+                        <p className="text-[10px] text-slate-400">Click the top-right button</p>
+                      </div>
+                      <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex flex-col justify-center items-center space-y-1">
+                        <span className="text-xl">2️⃣</span>
+                        <span className="font-semibold text-slate-200">Add details</span>
+                        <p className="text-[10px] text-slate-400">Input role metadata</p>
+                      </div>
+                      <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex flex-col justify-center items-center space-y-1">
+                        <span className="text-xl">3️⃣</span>
+                        <span className="font-semibold text-slate-200">Modify progress</span>
+                        <p className="text-[10px] text-slate-400">Click status dropdown</p>
+                      </div>
                     </div>
+                  </div>
 
-                    <button
-                      onClick={() => setActiveTab("matcher")}
-                      className="w-full mt-4 flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/20 px-4 py-2.5 text-xs font-bold text-slate-650 dark:text-slate-350 hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors active:scale-95"
+                  {/* Grayed-out Example Preview */}
+                  <div className="max-w-xl mx-auto space-y-2 opacity-35 relative pointer-events-none select-none">
+                    <span className="absolute -top-3 left-4 bg-slate-800 text-[8px] uppercase font-bold text-[#8b5cf6] px-2 py-0.5 rounded border border-[#8b5cf6]/20 shadow z-10">
+                      Example Preview
+                    </span>
+                    <div className="glass-card rounded-xl p-4 border border-white/5 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 bg-white/5 border border-white/10 rounded-lg flex items-center justify-center text-lg">
+                          🏢
+                        </div>
+                        <div>
+                          <h5 className="font-bold text-white text-xs">Example Corp</h5>
+                          <p className="text-[10px] text-slate-400">Senior React Engineer • $120k/yr</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-[#f59e0b] bg-[#f59e0b]/10 border border-[#f59e0b]/20 px-2 py-0.5 rounded-full">
+                          Interview
+                        </span>
+                        <span className="text-[10px] text-slate-500">2026-06-01</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                  {applications.map((app) => (
+                    <div
+                      key={app.id}
+                      className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 hover:shadow-xl transition-all duration-300 flex flex-col justify-between space-y-4"
                     >
-                      View All Matches <ChevronRight className="h-3 w-3 shrink-0" />
-                    </button>
-                  </Card>
-                </div>
-
-                {/* AI Career Coach Launcher */}
-                <Card className="p-6 border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-sm rounded-[24px] text-left flex flex-col gap-4">
-                  <div>
-                    <h3 className="font-extrabold text-slate-900 dark:text-white text-base">AI Career Coach</h3>
-                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 font-medium">Click any tool to chat instantly</p>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { label: "ATS Audit", icon: "🎯", action: "ATS Score Check", query: "Check my ATS score" },
-                      { label: "Resume Review", icon: "📝", action: "Resume Review", query: "Review my resume" },
-                      { label: "Skill Gap", icon: "📊", action: "Skill Gap Analysis", query: "Analyze my skill gaps" },
-                      { label: "Roadmap", icon: "🗺️", action: "Career Roadmap", query: "Give me a career roadmap" },
-                      { label: "Interview Prep", icon: "🚀", action: "Interview Practice", query: "Start a mock interview" },
-                      { label: "Salary Info", icon: "💵", action: "Salary Insights", query: "What is the salary for my role?" },
-                    ].map((tool, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          setActiveTab("assistant");
-                          setTimeout(() => handleSendMessage(tool.query, tool.action), 50);
-                        }}
-                        className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-950/20 cursor-pointer transition-all duration-200 hover:border-primary/30 hover:bg-primary/5 hover:-translate-y-0.5 hover:shadow-sm text-left"
-                      >
-                        <span className="text-base shrink-0">{tool.icon}</span>
-                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 leading-tight">{tool.label}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  <button
-                    onClick={() => setActiveTab("assistant")}
-                    className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-bold text-primary hover:bg-primary/10 transition-colors"
-                  >
-                    <MessageSquare className="h-3.5 w-3.5" />
-                    Open AI Coach
-                    <ChevronRight className="h-3 w-3" />
-                  </button>
-                </Card>
-              </div>
-            </div>
-          )}
-
-          {/* TAB: RESUME MATCHER */}
-          {activeTab === "matcher" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
-              <div className="flex flex-col gap-2">
-                <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                  <Sparkles className="h-6 w-6 text-primary animate-pulse" />
-                  Resume Matcher
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  Upload your resume to extract skills, calculate an ATS match score, and scrape
-                  live entry-level jobs tailored to your skillset.
-                </p>
-              </div>
-
-              {matcherPhase === "upload" && (
-                <div className="max-w-2xl mx-auto rounded-2xl border border-border bg-card p-6 shadow-sm space-y-6">
-                  {/* Trial status banner */}
-                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 flex items-center justify-between">
-                    <div className="space-y-1">
-                      <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
-                        <Sparkles className="h-4 w-4 text-primary shrink-0 animate-pulse" />
-                        Free Trial Usage
-                      </h4>
-                      <p className="text-xs text-muted-foreground">
-                        You get 3 free resume matches per account.
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-lg font-bold text-primary">
-                        {Math.max(0, 3 - trialsUsed)}
-                      </span>
-                      <span className="text-xs text-muted-foreground"> / 3 remaining</span>
-                    </div>
-                  </div>
-
-                  {trialsUsed >= 3 ? (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-6 text-center space-y-3">
-                      <AlertCircle className="h-8 w-8 text-destructive mx-auto" />
-                      <h4 className="text-sm font-bold text-foreground">Trial Limit Reached</h4>
-                      <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
-                        You have used all 3 free resume matches for <strong>{user?.email}</strong>. Upgrade your subscription to continue matching resumes.
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <div
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          setDragOver(true);
-                        }}
-                        onDragLeave={() => setDragOver(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setDragOver(false);
-                          handleFile(e.dataTransfer.files?.[0]);
-                        }}
-                        onClick={() => inputRef.current?.click()}
-                        className={[
-                          "group relative flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-primary/50",
-                          dragOver
-                            ? "border-primary bg-primary/5 scale-[1.02] shadow-lg shadow-primary/10 animate-pulse"
-                            : "border-border bg-muted/20 hover:border-primary/60 hover:bg-primary/5 hover:shadow-md hover:scale-[1.005]",
-                        ].join(" ")}
-                      >
-                        <input
-                          ref={inputRef}
-                          type="file"
-                          accept=".pdf,.doc,.docx"
-                          className="hidden"
-                          onChange={(e) => handleFile(e.target.files?.[0])}
-                        />
-                        <div className="rounded-full bg-primary/10 p-4 text-primary transition-transform group-hover:scale-110">
-                          <Upload className="h-7 w-7" />
-                        </div>
-                        <p className="mt-4 text-base font-semibold text-foreground">
-                          Drag &amp; drop your resume here
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          or click to browse from files (PDF, DOC, DOCX)
-                        </p>
-                      </div>
-
-                      {file && (
-                        <div className="flex items-center justify-between rounded-xl border border-border bg-muted/30 px-4 py-3">
-                          <div className="flex min-w-0 items-center gap-3 flex-1">
-                            <div className="rounded-lg bg-primary/10 p-2 text-primary shrink-0">
-                              <FileText className="h-4 w-4" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-foreground">
-                                {file.name}
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {(file.size / 1024).toFixed(1)} KB
-                              </p>
-                            </div>
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-[#8b5cf6]/10 border border-white/10 rounded-xl flex items-center justify-center text-md font-black text-[#8b5cf6] select-none">
+                            {app.company.charAt(0)}
                           </div>
-                          <button
-                            onClick={() => setFile(null)}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:bg-background hover:text-foreground shrink-0 ml-2"
-                          >
-                            <X className="h-4 w-4" /> Remove
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  <Button
-                    onClick={handleResumeSubmit}
-                    disabled={!file || trialsUsed >= 3}
-                    className="h-12 w-full rounded-xl text-base font-semibold shadow-sm active:scale-95 transition-all duration-200"
-                  >
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    Analyze &amp; Find Matches
-                  </Button>
-                </div>
-              )}
-
-              {matcherPhase === "loading" && (
-                <div className="max-w-2xl mx-auto rounded-2xl border border-border bg-card p-8 shadow-md text-center space-y-6">
-                  <div className="relative inline-block">
-                    <div className="absolute inset-0 animate-ping rounded-full bg-primary/20" />
-                    <div className="relative rounded-full bg-primary/10 p-6 text-primary">
-                      <Loader2 className="h-8 w-8 animate-spin" />
-                    </div>
-                  </div>
-                  <h2 className="text-xl font-bold text-foreground">Analyzing Your Profile</h2>
-                  <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                    Our AI models are parsing your resume skills and scraping top boards. This will
-                    take a few seconds.
-                  </p>
-
-                  <ol className="mt-8 space-y-3 text-left">
-                    {STEPS.map((s, i) => {
-                      const done = i < stepIndex;
-                      const active = i === stepIndex;
-                      return (
-                        <li
-                          key={i}
-                          className={[
-                            "flex items-start gap-3 rounded-xl border px-4 py-3 transition-all duration-300",
-                            active
-                              ? "border-primary/40 bg-primary/5 shadow-sm"
-                              : done
-                                ? "border-border bg-muted/20 opacity-80"
-                                : "border-border bg-muted/5 opacity-40",
-                          ].join(" ")}
-                        >
-                          <div className="mt-0.5">
-                            {done ? (
-                              <CheckCircle2 className="h-5 w-5 text-primary" />
-                            ) : active ? (
-                              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                            ) : (
-                              <div className="h-5 w-5 rounded-full border-2 border-border" />
-                            )}
-                          </div>
-                          <div className="text-sm">
-                            <span className="font-semibold text-foreground">Step {i + 1}:</span>{" "}
-                            <span className="text-muted-foreground">{s.label}</span>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </div>
-              )}
-
-              {matcherPhase === "results" && (
-                <div className="space-y-8 animate-in fade-in-50 duration-500">
-                  {/* Results Header with AI Coach Banner */}
-                  <div className="flex flex-col gap-4 text-left">
-                    <div className="flex items-center gap-3 p-4 rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/5 via-blue-500/5 to-purple-500/5 shadow-sm">
-                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                        <Sparkles className="h-5 w-5 text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-extrabold text-foreground">Get Deeper AI Analysis</p>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">Your resume data is ready — ask the AI Coach for ATS audit, skill gaps, salary insights, and more.</p>
-                      </div>
-                      <button
-                        onClick={() => setActiveTab("assistant")}
-                        className="shrink-0 flex items-center gap-1 rounded-xl bg-primary text-primary-foreground text-xs font-bold px-3 py-2 hover:opacity-90 transition-all active:scale-95"
-                      >
-                        <MessageSquare className="h-3.5 w-3.5" />
-                        AI Coach
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* TAB 1 PANEL: JOBS & INTERNSHIPS */}
-                  {resultsSubTab === "jobs" && (
-                    <div className="space-y-8 animate-in fade-in-50 duration-300">
-                      {/* Top Jobs Matches Section */}
-                      <div className="space-y-4 text-left">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div>
-                            <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                              <Briefcase className="h-5 w-5 text-primary" />
-                              Top Job Matches ({jobs.length})
-                            </h2>
-                            <p className="text-xs text-muted-foreground">
-                              Matching roles found via AI scraper, ranked by skillset compatibility.
-                            </p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            onClick={() => setMatcherPhase("upload")}
-                            className="rounded-xl shrink-0"
-                          >
-                            <RotateCcw className="mr-2 h-4 w-4" />
-                            Scrape Again
-                          </Button>
-                        </div>
-
-                        {jobs.length === 0 ? (
-                          <Card className="p-10 text-center text-muted-foreground shadow-sm border-dashed">
-                            No job matches found yet. Try uploading a different resume.
-                          </Card>
-                        ) : (
-                          <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                            {jobs.map((job, i) => {
-                              const isBookmarked = savedJobs.some((sj) => sj.url === job.url);
-                              return (
-                                <Card
-                                  key={i}
-                                  className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
-                                >
-                                  <div className="space-y-3">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0 flex-1">
-                                        <h3
-                                          onClick={() => setSelectedJob(job)}
-                                          className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
-                                        >
-                                          {job.title}
-                                        </h3>
-                                        <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
-                                          <Briefcase className="h-3 w-3 shrink-0" />
-                                          {job.company}
-                                        </p>
-                                      </div>
-                                      <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                                        {job.score}%
-                                      </span>
-                                    </div>
-
-                                    <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
-                                      <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                      {job.location || "Remote"}
-                                    </p>
-
-                                    {job.matchReasons && job.matchReasons.length > 0 && (
-                                      <div className="mt-3 pt-3 border-t border-border/40 space-y-1.5 text-left">
-                                        <h4 className="text-[10px] font-bold text-foreground/80 uppercase tracking-wider flex items-center gap-1">
-                                          <Sparkles className="h-3 w-3 text-primary shrink-0" />
-                                          Match Insights
-                                        </h4>
-                                        <ul className="space-y-1">
-                                          {job.matchReasons.slice(0, 2).map((reason, idx) => (
-                                            <li key={idx} className="text-[11px] text-muted-foreground leading-normal flex items-start gap-1.5">
-                                              <span className="text-primary shrink-0 mt-0.5">•</span>
-                                              <span className="line-clamp-2">{reason}</span>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      onClick={() => toggleSaveJob(job)}
-                                      className="h-9 w-9 rounded-lg shrink-0"
-                                    >
-                                      {isBookmarked ? (
-                                        <BookmarkCheck className="h-4 w-4 text-primary fill-primary" />
-                                      ) : (
-                                        <Bookmark className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                    <a
-                                      href={job.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={() => handleApplyClick(job)}
-                                      className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
-                                    >
-                                      Apply Now
-                                      <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                  </div>
-                                </Card>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Top Internship Matches Section */}
-                      <div className="space-y-4 pt-6 border-t border-border/60 text-left animate-in fade-in-50 duration-300">
-                        <div>
-                          <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                            <FileSpreadsheet className="h-5 w-5 text-purple-500" />
-                            Top Internship Matches ({internships.length})
-                          </h2>
-                          <p className="text-xs text-muted-foreground">
-                            Live internship opportunities mapped to your skillset.
-                          </p>
-                        </div>
-
-                        {internships.length === 0 ? (
-                          <Card className="p-10 text-center text-muted-foreground shadow-sm border-dashed">
-                            No internship matches found in this scan.
-                          </Card>
-                        ) : (
-                          <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                            {internships.map((internship, i) => {
-                              const isBookmarked = savedJobs.some((sj) => sj.url === internship.url);
-                              return (
-                                <Card
-                                  key={i}
-                                  className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
-                                >
-                                  <div className="space-y-3">
-                                    <div className="flex items-start justify-between gap-2">
-                                      <div className="min-w-0 flex-1">
-                                        <h3
-                                          onClick={() => setSelectedJob(internship)}
-                                          className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
-                                        >
-                                          {internship.title}
-                                        </h3>
-                                        <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
-                                          <Briefcase className="h-3 w-3 shrink-0" />
-                                          {internship.company}
-                                        </p>
-                                      </div>
-                                      <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                                        {internship.score}%
-                                      </span>
-                                    </div>
-
-                                    <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
-                                      <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                      {internship.location || "Remote"}
-                                    </p>
-
-                                    {internship.matchReasons && internship.matchReasons.length > 0 && (
-                                      <div className="mt-3 pt-3 border-t border-border/40 space-y-1.5 text-left">
-                                        <h4 className="text-[10px] font-bold text-foreground/80 uppercase tracking-wider flex items-center gap-1">
-                                          <Sparkles className="h-3 w-3 text-primary shrink-0" />
-                                          Match Insights
-                                        </h4>
-                                        <ul className="space-y-1">
-                                          {internship.matchReasons.slice(0, 2).map((reason, idx) => (
-                                            <li key={idx} className="text-[11px] text-muted-foreground leading-normal flex items-start gap-1.5">
-                                              <span className="text-primary shrink-0 mt-0.5">•</span>
-                                              <span className="line-clamp-2">{reason}</span>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      onClick={() => toggleSaveJob(internship)}
-                                      className="h-9 w-9 rounded-lg shrink-0"
-                                    >
-                                      {isBookmarked ? (
-                                        <BookmarkCheck className="h-4 w-4 text-primary fill-primary" />
-                                      ) : (
-                                        <Bookmark className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                    <a
-                                      href={internship.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={() => handleApplyClick(internship)}
-                                      className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
-                                    >
-                                      Apply Now
-                                      <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                  </div>
-                                </Card>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TAB 2 PANEL: RESUME AUDIT */}
-                  {resultsSubTab === "resume" && (
-                    <div className="grid gap-6 md:grid-cols-3 text-left animate-in fade-in-50 duration-300">
-                      {/* ATS SCORE CARD */}
-                      <Card className="p-6 flex flex-col items-center justify-center text-center shadow-md border-primary/10 bg-primary/5">
-                        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                          ATS Score Match
-                        </h3>
-                        <div className="relative mt-4 flex items-center justify-center">
-                          <svg className="h-32 w-32 transform -rotate-90">
-                            <circle
-                              cx="64"
-                              cy="64"
-                              r="50"
-                              className="stroke-muted fill-none"
-                              strokeWidth="8"
-                            />
-                            <circle
-                              cx="64"
-                              cy="64"
-                              r="50"
-                              className="stroke-primary fill-none transition-all duration-1000 ease-out"
-                              strokeWidth="8"
-                              strokeDasharray={2 * Math.PI * 50}
-                              strokeDashoffset={2 * Math.PI * 50 * (1 - atsScore / 100)}
-                              strokeLinecap="round"
-                            />
-                          </svg>
-                          <span className="absolute text-3xl font-extrabold text-foreground">
-                            {atsScore}%
-                          </span>
-                        </div>
-                        <p className="mt-3 text-xs text-muted-foreground">
-                          {atsScore >= 80
-                            ? "Excellent ATS suitability scan!"
-                            : "Solid match, review the optimization suggestions below."}
-                        </p>
-                      </Card>
-
-                      {/* SKILLS AND ROLES CARD */}
-                      <Card className="p-6 md:col-span-2 shadow-md space-y-4">
-                        <div className="space-y-2">
-                          <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                            Extracted Skills
-                          </h3>
-                          <div className="flex flex-wrap gap-1.5">
-                            {parsedSkills.length === 0 ? (
-                              <span className="text-xs text-muted-foreground italic">No skills listed.</span>
-                            ) : (
-                              parsedSkills.map((skill, idx) => (
-                                <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5 font-semibold">
-                                  {skill}
-                                </Badge>
-                              ))
-                            )}
+                            <h5 className="font-extrabold text-white text-sm tracking-tight">{app.company}</h5>
+                            <p className="text-[11px] text-[#94a3b8] font-bold select-none">{app.role}</p>
                           </div>
                         </div>
-
-                        {resumeData?.roles && Array.isArray(resumeData.roles) && resumeData.roles.length > 0 && (
-                          <div className="space-y-2 pt-2 border-t border-border/40">
-                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                              Target Roles
-                            </h3>
-                            <div className="flex flex-wrap gap-1.5">
-                              {resumeData.roles.map((role: string, idx: number) => (
-                                <Badge key={idx} variant="outline" className="text-[10px] px-2 py-0.5 border-primary/30 text-primary font-bold">
-                                  {role}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {resumeData?.experience && (
-                          <div className="space-y-1.5 pt-2 border-t border-border/40">
-                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                              Experience Profile
-                            </h3>
-                            <p className="text-xs text-muted-foreground leading-relaxed">
-                              {typeof resumeData.experience === "string"
-                                ? resumeData.experience
-                                : Array.isArray(resumeData.experience)
-                                  ? resumeData.experience.join(" | ")
-                                  : JSON.stringify(resumeData.experience)}
-                            </p>
-                          </div>
-                        )}
-
-                        {((resumeData?.keywords && Array.isArray(resumeData.keywords) && resumeData.keywords.length > 0) ||
-                          (careerAnalysis?.keywords && Array.isArray(careerAnalysis.keywords) && careerAnalysis.keywords.length > 0)) && (
-                          <div className="space-y-2 pt-2 border-t border-border/40">
-                            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                              Important Keywords Added
-                            </h3>
-                            <div className="flex flex-wrap gap-1.5">
-                              {[
-                                ...(Array.isArray(resumeData?.keywords) ? resumeData.keywords : []),
-                                ...(Array.isArray(careerAnalysis?.keywords) ? careerAnalysis.keywords : [])
-                              ].map((keyword: string, idx: number) => (
-                                <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5 bg-muted/65 text-foreground/80 font-medium">
-                                  {keyword}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </Card>
-
-                      {/* RESUME REVIEW CARD */}
-                      <Card className="p-6 md:col-span-3 shadow-md border-t border-primary/20 bg-muted/10">
-                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
-                          <FileText className="h-4 w-4 text-primary shrink-0" />
-                          ATS Suitability &amp; Resume Review
-                        </h3>
-                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
-                          {careerAnalysis?.resumeReview || careerAnalysis?.atsScore?.feedback || (
-                            `Suggestions for improvement:
-                            • Ensure keyword density represents target roles (e.g. FastAPI, Vector Databases, Python) 3-4 times.
-                            • Convert generic bullet descriptions into quantitative statements showing impact (e.g., "improved query speeds by 30%").
-                            • Avoid graphs, graphical tables, or colored columns to ensure scanner readability.`
-                          )}
-                        </div>
-                      </Card>
-                    </div>
-                  )}
-
-                  {/* TAB 3 PANEL: AI CAREER STRATEGY */}
-                  {resultsSubTab === "career" && (
-                    <div className="grid gap-6 md:grid-cols-2 text-left animate-in fade-in-50 duration-300">
-                      {/* SKILL GAP ANALYSIS */}
-                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
-                        <div>
-                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
-                            <AlertCircle className="h-4 w-4 text-orange-500 shrink-0 animate-pulse" />
-                            Skill Gap Analysis
-                          </h3>
-                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40">
-                            {careerAnalysis?.skillGapAnalysis || careerAnalysis?.skillGap || (
-                              `No significant gaps detected! To boost call-backs for top-tier roles:
-                              1. Focus on hands-on deployment (e.g., Vercel, AWS or Docker containers).
-                              2. Build end-to-end portfolio projects that demonstrate database integrations.`
-                            )}
-                          </div>
-                        </div>
-                      </Card>
-
-                      {/* SALARY INSIGHTS */}
-                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
-                        <div>
-                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
-                            <Sparkles className="h-4 w-4 text-green-500 shrink-0" />
-                            Salary Insights
-                          </h3>
-                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40">
-                            {careerAnalysis?.salaryInsights || careerAnalysis?.salaries || (
-                              `Average Industry Annual Expectations:
-                              • AI / Machine Learning Engineer: $115,000 - $180,000+
-                              • Full-Stack Engineer (React/FastAPI): $90,000 - $150,000
-                              • Backend Developer (Node/Python): $85,000 - $140,000`
-                            )}
-                          </div>
-                        </div>
-                      </Card>
-
-                      {/* CAREER ROADMAP */}
-                      <Card className="p-6 md:col-span-2 shadow-md border-t border-border">
-                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-4">
-                          <RotateCcw className="h-4 w-4 text-blue-500 shrink-0" />
-                          AI Career Roadmap &amp; Milestones
-                        </h3>
-                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
-                          {careerAnalysis?.careerRoadmap || careerAnalysis?.roadmap || (
-                            `Milestones for career progression:
-                            • Phase 1: Deepen foundational frameworks (React, FastAPI/Python, SQL databases).
-                            • Phase 2: Create a live deployed full-stack project utilizing modern vector indexes.
-                            • Phase 3: Optimize resume with parsed statistics and build outreach referrals on LinkedIn.`
-                          )}
-                        </div>
-                      </Card>
-
-                      {/* LINKEDIN OPTIMIZATION */}
-                      <Card className="p-6 md:col-span-2 shadow-md border-t border-border">
-                        <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-4">
-                          <ExternalLink className="h-4 w-4 text-blue-600 shrink-0" />
-                          LinkedIn Profile Optimization
-                        </h3>
-                        <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-card p-4 rounded-xl border border-border/60">
-                          {careerAnalysis?.linkedinOptimization || careerAnalysis?.linkedin || (
-                            `Voted strategic tips to capture recruiter searches:
-                            • Headline: "AI / Full-Stack Engineer | React, FastAPI, SQL | Building Scalable RAG Pipelines"
-                            • Summary Section: Focus on quantitative capstone impact and standard technology keyword indexes.
-                            • Skill Section: Add exact keyword targets (FastAPI, React, SQL, Vector Index, Python).`
-                          )}
-                        </div>
-                      </Card>
-                    </div>
-                  )}
-
-                  {/* TAB 4 PANEL: PREP & TOOLS */}
-                  {resultsSubTab === "tools" && (
-                    <div className="grid gap-6 md:grid-cols-2 text-left animate-in fade-in-50 duration-300">
-                      {/* INTERVIEW PRACTICE */}
-                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
-                        <div>
-                          <h3 className="text-sm font-bold text-foreground flex items-center gap-1.5 mb-3">
-                            <MessageSquare className="h-4 w-4 text-purple-500 shrink-0" />
-                            Interview Practice Questions
-                          </h3>
-                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40 h-80 overflow-y-auto">
-                            {careerAnalysis?.interviewPractice || careerAnalysis?.interviewQuestions || (
-                              `Focus on these common technical interview targets:
-                              1. Explain the stateless nature of REST APIs and how systems manage session data.
-                              2. How do you implement database caching to speed up high-volume API requests?
-                              3. Walk me through a full-stack project architecture and your favorite state-management patterns.`
-                            )}
-                          </div>
-                        </div>
-                      </Card>
-
-                      {/* COVER LETTER GENERATOR */}
-                      <Card className="p-6 shadow-md border-t border-border flex flex-col justify-between">
-                        <div className="space-y-3">
-                          <h3 className="text-sm font-bold text-foreground flex items-center justify-between gap-1.5">
-                            <span className="flex items-center gap-1.5">
-                              <FileText className="h-4 w-4 text-primary shrink-0" />
-                              Custom Cover Letter Generator
-                            </span>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-[10px] font-bold rounded-lg"
-                              onClick={() => {
-                                const letter = careerAnalysis?.coverLetter || careerAnalysis?.coverLetterTemplate || "Dear Hiring Team...";
-                                navigator.clipboard.writeText(letter);
-                                toast.success("Cover letter copied to clipboard!");
-                              }}
-                            >
-                              Copy Letter
-                            </Button>
-                          </h3>
-                          <div className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line bg-muted/30 p-4 rounded-xl border border-border/40 h-80 overflow-y-auto font-mono">
-                            {careerAnalysis?.coverLetter || careerAnalysis?.coverLetterTemplate || (
-                              `Dear Hiring Manager,
-
-                              I am writing to express my eager interest in the Engineering / AI developer position. With a strong background in frameworks like React, Node.js, and Python/FastAPI, I am confident in my capacity to add value to your codebase.
-
-                              I look forward to discussing how my experience aligns with your current team projects.
-
-                              Sincerely,
-                              ${profile?.full_name || "Applicant"}`
-                            )}
-                          </div>
-                        </div>
-                      </Card>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB: AI CAREER ASSISTANT */}
-          {activeTab === "assistant" && (
-            <div className="grid gap-6 md:grid-cols-4 h-[calc(100vh-12rem)] md:h-[calc(100vh-8rem)]">
-              {/* Sidebar: Chat sessions */}
-              <Card className="hidden md:flex md:flex-col p-4 border-border bg-card shadow-sm rounded-2xl h-full space-y-4">
-                <div className="flex items-center justify-between border-b border-border/40 pb-3">
-                  <span className="text-xs font-bold text-foreground uppercase tracking-wider">Sessions</span>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={handleNewChatSession}
-                    className="h-8 w-8 rounded-lg"
-                    title="New Session"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                  {chatSessions.map((session) => {
-                    const isActive = session.id === activeSessionId;
-                    return (
-                      <div
-                        key={session.id}
-                        onClick={() => setActiveSessionId(session.id)}
-                        className={[
-                          "group flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all border text-left",
-                          isActive
-                            ? "bg-primary/5 text-primary border-primary/20"
-                            : "border-transparent hover:bg-muted text-muted-foreground hover:text-foreground"
-                        ].join(" ")}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <span className="text-xs font-bold block truncate">{session.title}</span>
-                          <span className="text-[9px] opacity-75">{session.date}</span>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(e) => handleDeleteChatSession(session.id, e)}
-                          className="h-7 w-7 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                        <button
+                          onClick={() => handleDeleteApplication(app.id)}
+                          className="text-slate-500 hover:text-[#ef4444] p-1.5 rounded-lg hover:bg-white/5 transition-colors"
                         >
                           <Trash2 className="h-4 w-4" />
-                        </Button>
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              </Card>
 
-              {/* Main Chat Window */}
-              <Card className="md:col-span-3 flex flex-col border-border bg-card shadow-md rounded-2xl h-full overflow-hidden">
-                <div className="flex items-center justify-between border-b border-border/50 px-6 py-4 bg-muted/20">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                      <Sparkles className="h-4 w-4" />
+                      <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400 select-none">
+                        <div className="flex items-center gap-1">
+                          <DollarSign className="w-3.5 h-3.5 text-slate-500" />
+                          <span>{app.salary || "N/A"}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                          <span>{app.date}</span>
+                        </div>
+                      </div>
+
+                      {app.notes && (
+                        <p className="text-[10px] text-slate-400 bg-white/5 border border-white/5 rounded-xl p-3 leading-relaxed">
+                          📝 {app.notes}
+                        </p>
+                      )}
+
+                      <div className="flex items-center justify-between border-t border-white/[0.04] pt-3">
+                        <span className="text-[9px] text-slate-500 font-extrabold uppercase tracking-widest">
+                          Application Stage
+                        </span>
+                        <select
+                          value={app.status}
+                          onChange={(e) => handleUpdateAppStatus(app.id, e.target.value)}
+                          className="bg-slate-900 border border-white/10 text-white rounded-lg px-2.5 py-1 text-xs outline-none focus:border-[#8b5cf6] transition-colors cursor-pointer"
+                        >
+                          <option value="Applied">Applied</option>
+                          <option value="Under Review">Under Review</option>
+                          <option value="Interview">Interview</option>
+                          <option value="Rejected">Rejected</option>
+                          <option value="Offer">Offer</option>
+                        </select>
+                      </div>
                     </div>
-                    <div className="text-left">
-                      <h3 className="font-bold text-foreground text-sm">
-                        {chatSessions.find(s => s.id === activeSessionId)?.title || "AI Career Coach"}
-                      </h3>
-                      <p className="text-[10px] text-muted-foreground">Tailored for entry-level tech roles</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 5: PROFILE REDESIGN */}
+          {activeTab === "profile" && (
+            <div className="space-y-6 animate-in fade-in duration-300">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+
+                {/* Left Profile Panel */}
+                <div className="glass-card rounded-3xl p-6 border border-white/5 flex flex-col items-center space-y-6">
+                  {/* Rotating Gold Gradient Ring */}
+                  <div className="relative w-28 h-28 select-none">
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6] animate-rotate-avatar-ring border border-transparent" />
+                    <div className="absolute inset-[3.5px] rounded-full bg-[#0f0d20] flex items-center justify-center text-3xl font-black text-[#8b5cf6]">
+                      {profileForm.fullName ? profileForm.fullName.charAt(0) : "R"}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleExportChat}
-                      className="h-8 text-xs font-semibold rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
-                    >
-                      <Download className="mr-1.5 h-4 w-4" />
-                      Export
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleClearChat}
-                      className="h-8 text-xs font-semibold rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Trash2 className="mr-1.5 h-4 w-4" />
-                      Clear
-                    </Button>
+                  <div className="text-center space-y-1">
+                    <h3 className="font-extrabold text-white text-lg tracking-tight select-none">
+                      {profileForm.fullName || "Ramya"}
+                    </h3>
+                    <p className="text-xs text-slate-400 select-none">
+                      {profileForm.email || "ramya@example.com"}
+                    </p>
+                  </div>
+
+                  <div className="w-full space-y-3 pt-3 border-t border-white/[0.04]">
+                    {/* Resume Chip */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-bold select-none">Resume Doc:</span>
+                      {resumeFile ? (
+                        <div className="flex items-center gap-1 bg-[#10b981]/10 border border-[#10b981]/20 text-[#10b981] px-2.5 py-1 rounded-full text-[10px] font-semibold">
+                          <FileText className="w-3.5 h-3.5 text-[#10b981]" />
+                          <span className="max-w-[80px] truncate">{resumeFile.name}</span>
+                          <span className="text-[9px] text-[#10b981]">(Loaded)</span>
+                        </div>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20">
+                          Missing
+                        </span>
+                      )}
+                    </div>
+
+                    {/* ATS Evaluator chip */}
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 font-bold select-none">ATS Evaluator:</span>
+                      {checklist.atsAudit ? (
+                        <div className="flex items-center gap-1.5 bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20 px-2.5 py-1 rounded-full text-[10px] font-semibold">
+                          <CircularProgress value={atsScore} size={16} strokeWidth={2.5} showText={false} primaryColor="#10b981" />
+                          <span>Audited: {atsScore}%</span>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-semibold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                          Not Evaluated
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Profile Completion Bar */}
+                    <div className="space-y-1.5 pt-1 select-none">
+                      <div className="flex justify-between items-center text-xs font-semibold">
+                        <span className="text-slate-400">Profile Completion</span>
+                        <span className="text-[#8b5cf6]">{profileScore}%</span>
+                      </div>
+                      <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden border border-white/5">
+                        <div
+                          className="bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] h-1.5 rounded-full transition-all duration-1000 ease-out"
+                          style={{ width: `${isMounted ? profileScore : 0}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 text-left">
-                  {chatMessages.length === 0 ? (
-                    <div className="h-full flex flex-col justify-start w-full py-2 space-y-6">
-                      {/* Suggestion questions grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-                        {[
-                          "\"Review my resume\"",
-                          "\"Improve my ATS score\"",
-                          "\"How can I get a software engineer job?\"",
-                          "\"What skills should I learn for AI Engineer roles?\"",
-                          "\"Prepare me for Java interviews\"",
-                          "\"Suggest projects for placements\""
-                        ].map((item, idx) => {
-                          const cleanedQuery = item.replace(/"/g, "");
-                          return (
-                            <button
-                              key={idx}
-                              onClick={() => handleSendMessage(cleanedQuery)}
-                              className="text-left py-3.5 px-4 rounded-[16px] border border-slate-100 dark:border-slate-800 bg-white/70 dark:bg-slate-900/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:border-slate-200 dark:hover:border-slate-700 active:scale-[0.99] transition-all duration-150 text-[13px] font-bold text-slate-800 dark:text-slate-200 shadow-sm"
-                            >
-                              {item}
-                            </button>
-                          );
-                        })}
+                {/* Right Profile Panel Form */}
+                <div className="lg:col-span-2 glass-card rounded-3xl p-6 border border-white/5">
+                  <form onSubmit={handleSaveProfileSubmit} className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Name field */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-name" className="text-xs font-bold text-slate-300">Full Name *</Label>
+                        <Input
+                          id="prof-name"
+                          type="text"
+                          required
+                          value={profileForm.fullName}
+                          onChange={(e) => handleProfileFieldChange("fullName", e.target.value)}
+                          className={`h-12 bg-[#15122e] border-white/10 text-[#f8fafc] rounded-xl text-xs focus:ring-2 focus:ring-[#8b5cf6]/30 focus:border-[#8b5cf6] ${showRequiredErrors && !profileForm.fullName
+                              ? "border-[#ef4444]/60 shadow-[0_0_8px_rgba(239,68,68,0.3)] animate-pulse"
+                              : ""
+                            }`}
+                        />
                       </div>
 
-                      {/* Quick Actions Label */}
-                      <div className="flex items-center gap-1.5 px-0.5 text-slate-700 dark:text-slate-300 font-extrabold text-xs tracking-wider uppercase mt-4 mb-2">
-                        <span className="text-orange-500 animate-pulse">⚡</span>
-                        <span>Smart Quick Actions</span>
+                      {/* Email Read-only */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-email" className="text-xs font-bold text-slate-300">Email Address (Read-only)</Label>
+                        <Input
+                          id="prof-email"
+                          type="email"
+                          readOnly
+                          value={profileForm.email}
+                          className="h-12 bg-slate-900 border-white/5 text-slate-400 rounded-xl text-xs cursor-not-allowed select-none"
+                        />
                       </div>
 
-                      {/* 9-card pastel grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full">
-                        {[
-                          {
-                            title: "Resume Review",
-                            desc: "Critical recommendations to boost callback rates.",
-                            query: "Review my resume",
-                            bg: "bg-blue-50/50 dark:bg-blue-950/20 border-blue-100/40 dark:border-blue-900/10 hover:border-blue-300 dark:hover:border-blue-700",
-                          },
-                          {
-                            title: "ATS Score Check",
-                            desc: "Detailed analysis on parsing, formatting, and density.",
-                            query: "Improve my ATS score",
-                            bg: "bg-slate-50/50 dark:bg-slate-900/30 border-slate-100 dark:border-slate-800/20 hover:border-slate-300 dark:hover:border-slate-700",
-                          },
-                          {
-                            title: "Skill Gap Analysis",
-                            desc: "Map your listed stack against top industry hiring filters.",
-                            query: "What skills should I learn?",
-                            bg: "bg-purple-50/50 dark:bg-purple-950/20 border-purple-100/40 dark:border-purple-900/10 hover:border-purple-300 dark:hover:border-purple-700",
-                          },
-                          {
-                            title: "Interview Practice",
-                            desc: "Interactive multi-step simulator grading answers.",
-                            query: "Start a mock interview",
-                            bg: "bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100/40 dark:border-emerald-900/10 hover:border-emerald-300 dark:hover:border-emerald-700",
-                          },
-                          {
-                            title: "Career Roadmap",
-                            desc: "Phased learning timelines and milestone strategies.",
-                            query: "Suggest a career roadmap",
-                            bg: "bg-amber-50/50 dark:bg-amber-950/20 border-amber-100/40 dark:border-amber-900/10 hover:border-amber-300 dark:hover:border-amber-700",
-                          },
-                          {
-                            title: "Job Recommendations",
-                            desc: "Resume-aware suggestions with custom matching weights.",
-                            query: "Give me job recommendations",
-                            bg: "bg-teal-50/50 dark:bg-teal-950/20 border-teal-100/40 dark:border-teal-900/10 hover:border-teal-300 dark:hover:border-teal-700",
-                          },
-                          {
-                            title: "Salary Insights",
-                            desc: "Competitive analysis of compensation benchmarks.",
-                            query: "What is the salary for my role?",
-                            bg: "bg-orange-50/50 dark:bg-orange-950/20 border-orange-100/40 dark:border-orange-900/10 hover:border-orange-300 dark:hover:border-orange-700",
-                          },
-                          {
-                            title: "LinkedIn Optimization",
-                            desc: "Strategic headline, summary, and visibility audits.",
-                            query: "LinkedIn tips",
-                            bg: "bg-sky-50/50 dark:bg-sky-950/20 border-sky-100/40 dark:border-sky-900/10 hover:border-sky-300 dark:hover:border-sky-700",
-                          },
-                          {
-                            title: "Cover Letter Generator",
-                            desc: "Custom-tailored letter templates targeting job openings.",
-                            query: "Write a cover letter for me",
-                            bg: "bg-rose-50/50 dark:bg-rose-950/20 border-rose-100/40 dark:border-rose-900/10 hover:border-rose-300 dark:hover:border-rose-700",
-                          },
-                        ].map((card, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => handleSendMessage(card.query, card.title)}
-                            className={[
-                              "group flex flex-col gap-1.5 p-3.5 rounded-[16px] border border-transparent cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm text-left justify-between",
-                              card.bg,
-                            ].join(" ")}
+                      {/* Password Masked */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-pass" className="text-xs font-bold text-slate-300">Password</Label>
+                        <div className="relative">
+                          <Input
+                            id="prof-pass"
+                            type={showPassword ? "text" : "password"}
+                            value="••••••••••••••••"
+                            readOnly
+                            className="h-12 bg-slate-900 border-white/5 text-slate-400 rounded-xl text-xs cursor-not-allowed select-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-3.5 top-4 text-slate-500 hover:text-white"
                           >
-                            <div className="flex items-center justify-between">
-                              <span className="text-[13px] font-bold text-gray-900 dark:text-gray-100 leading-tight">
-                                {card.title}
-                              </span>
-                              <ChevronRight className="h-3.5 w-3.5 text-gray-450 dark:text-gray-500 shrink-0 group-hover:text-gray-650 dark:group-hover:text-gray-300 transition-colors" />
-                            </div>
-                            <span className="text-[11px] text-gray-500 dark:text-gray-400 leading-relaxed mt-1">
-                              {card.desc}
-                            </span>
-                          </div>
+                            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Target City/State */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-city" className="text-xs font-bold text-slate-300">Target Location *</Label>
+                        <Input
+                          id="prof-city"
+                          type="text"
+                          required
+                          value={profileForm.targetCityState}
+                          onChange={(e) => handleProfileFieldChange("targetCityState", e.target.value)}
+                          className={`h-12 bg-[#15122e] border-white/10 text-[#f8fafc] rounded-xl text-xs focus:ring-2 focus:ring-[#8b5cf6]/30 focus:border-[#8b5cf6] ${showRequiredErrors && !profileForm.targetCityState
+                              ? "border-[#ef4444]/60 shadow-[0_0_8px_rgba(239,68,68,0.3)] animate-pulse"
+                              : ""
+                            }`}
+                        />
+                      </div>
+
+                      {/* Target Role Title */}
+                      <div className="space-y-1.5 md:col-span-2">
+                        <Label htmlFor="prof-title" className="text-xs font-bold text-slate-300">Target Job Title *</Label>
+                        <Input
+                          id="prof-title"
+                          type="text"
+                          required
+                          value={profileForm.targetJobTitle}
+                          onChange={(e) => handleProfileFieldChange("targetJobTitle", e.target.value)}
+                          className={`h-12 bg-[#15122e] border-white/10 text-[#f8fafc] rounded-xl text-xs focus:ring-2 focus:ring-[#8b5cf6]/30 focus:border-[#8b5cf6] ${showRequiredErrors && !profileForm.targetJobTitle
+                              ? "border-[#ef4444]/60 shadow-[0_0_8px_rgba(239,68,68,0.3)] animate-pulse"
+                              : ""
+                            }`}
+                        />
+                      </div>
+
+                      {/* Experience Level Dropdown */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-exp" className="text-xs font-bold text-slate-300">Experience Level</Label>
+                        <select
+                          id="prof-exp"
+                          value={profileForm.experienceLevel}
+                          onChange={(e) => handleProfileFieldChange("experienceLevel", e.target.value)}
+                          className="h-12 w-full bg-[#15122e] border border-white/10 text-white rounded-xl text-xs px-3 outline-none focus:ring-2 focus:ring-[#8b5cf6]/30 cursor-pointer"
+                        >
+                          <option value="Freshman/Student">Freshman/Student</option>
+                          <option value="Entry Level">Entry Level</option>
+                          <option value="Mid Level">Mid Level</option>
+                          <option value="Senior Level">Senior Level</option>
+                        </select>
+                      </div>
+
+                      {/* Job Type Dropdown */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="prof-job" className="text-xs font-bold text-slate-300">Preferred Job Type</Label>
+                        <select
+                          id="prof-job"
+                          value={profileForm.preferredJobType}
+                          onChange={(e) => handleProfileFieldChange("preferredJobType", e.target.value)}
+                          className="h-12 w-full bg-[#15122e] border border-white/10 text-white rounded-xl text-xs px-3 outline-none focus:ring-2 focus:ring-[#8b5cf6]/30 cursor-pointer"
+                        >
+                          <option value="Full-time">Full-time</option>
+                          <option value="Part-time">Part-time</option>
+                          <option value="Contract">Contract</option>
+                          <option value="Internship">Internship</option>
+                          <option value="Remote">Remote</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Skill tag inputs style */}
+                    <div className="space-y-2 pt-2 select-none">
+                      <Label htmlFor="prof-skills" className="text-xs font-bold text-slate-300">Professional Skills Tag-input (Press Enter to add)</Label>
+                      <Input
+                        id="prof-skills"
+                        type="text"
+                        placeholder="Type a skill and hit Enter..."
+                        value={skillInput}
+                        onChange={(e) => setSkillInput(e.target.value)}
+                        onKeyDown={handleSkillKeyDown}
+                        className="h-12 bg-[#15122e] border-white/10 text-[#f8fafc] rounded-xl text-xs focus:ring-2 focus:ring-[#8b5cf6]/30"
+                      />
+
+                      {/* Skill tags display */}
+                      <div className="flex flex-wrap gap-2 pt-2">
+                        {skillsList.map((skill, index) => (
+                          <span
+                            key={index}
+                            className="bg-[#8b5cf6]/15 border border-[#8b5cf6]/25 text-[#3b82f6] px-3 h-9 rounded-full text-xs font-bold shadow-sm flex items-center gap-1.5 animate-in fade-in zoom-in-95 duration-150"
+                          >
+                            {skill}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSkill(index)}
+                              className="text-[#3b82f6] hover:text-[#ef4444] font-extrabold focus:outline-none ml-1 transition-colors"
+                            >
+                              ✕
+                            </button>
+                          </span>
                         ))}
                       </div>
                     </div>
-                  ) : (
-                    <div className="space-y-5">
-                      {chatMessages.map((msg) => {
-                        const isAi = msg.sender === "ai";
-                        return (
-                          <div
-                            key={msg.id}
-                            className={[
-                              "flex gap-3 text-left",
-                              isAi ? "justify-start items-start" : "justify-end items-end flex-row-reverse"
-                            ].join(" ")}
-                          >
-                            {/* Avatar */}
-                            <div className={[
-                              "h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-extrabold shrink-0 mt-0.5 ring-2",
-                              isAi
-                                ? "bg-gradient-to-br from-primary/80 to-blue-500/80 text-white ring-primary/20"
-                                : "bg-gradient-to-br from-slate-700 to-slate-900 text-white ring-slate-500/20 dark:from-slate-600 dark:to-slate-800"
-                            ].join(" ")}>
-                              {isAi ? "✦" : (profile?.full_name?.charAt(0).toUpperCase() || "U")}
-                            </div>
 
-                            {/* Bubble */}
-                            <div className={[
-                              "max-w-[82%] rounded-2xl px-5 py-4 space-y-1 shadow-sm",
-                              isAi
-                                ? "bg-white dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700/60 rounded-tl-sm"
-                                : "bg-primary text-primary-foreground rounded-tr-sm"
-                            ].join(" ")}>
-                              {/* Header */}
-                              <div className="flex items-center gap-2 mb-2">
-                                <span className={["text-[10px] font-extrabold tracking-wide", isAi ? "text-primary" : "text-primary-foreground/80"].join(" ")}>
-                                  {isAi ? "✦ AI Career Coach" : "You"}
-                                </span>
-                                <span className={["text-[9px]", isAi ? "text-muted-foreground" : "text-primary-foreground/60"].join(" ")}>{msg.timestamp}</span>
-                              </div>
-
-                              {/* Content */}
-                              {isAi ? (
-                                <div className="space-y-0.5">
-                                  {msg.text ? renderFormattedText(msg.text) : (
-                                    <div className="flex items-center gap-1.5 py-1">
-                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]"></span>
-                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]"></span>
-                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-bounce"></span>
-                                    </div>
-                                  )}
-                                  {/* Roadmap Cards */}
-                                  {msg.isRoadmap && msg.roadmapData && (
-                                    <div className="mt-4 space-y-2">
-                                      {msg.roadmapData.map((phase, pIdx) => (
-                                        <div key={pIdx} className="flex gap-3 p-3 rounded-xl bg-primary/5 border border-primary/10">
-                                          <div className="flex flex-col items-center gap-1 shrink-0">
-                                            <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-[10px] font-extrabold flex items-center justify-center">{pIdx + 1}</div>
-                                            {pIdx < (msg.roadmapData?.length ?? 0) - 1 && <div className="w-0.5 flex-1 bg-primary/10 mt-1 min-h-[12px]" />}
-                                          </div>
-                                          <div className="space-y-1">
-                                            <p className="text-[11px] font-bold text-foreground">{phase.title}</p>
-                                            {phase.timeline && <p className="text-[10px] text-primary font-semibold">{phase.timeline}</p>}
-                                            <div className="flex flex-wrap gap-1 mt-1">
-                                              {phase.skills.map((skill, sIdx) => (
-                                                <span key={sIdx} className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-medium text-muted-foreground">{skill}</span>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                  {/* Job Rec Cards */}
-                                  {msg.isJobRecs && msg.jobRecsData && (
-                                    <div className="mt-4 space-y-2">
-                                      {msg.jobRecsData.map((job, jIdx) => (
-                                        <div key={jIdx} className="flex items-start justify-between gap-3 p-3 rounded-xl bg-muted/30 border border-border/40">
-                                          <div className="min-w-0 space-y-0.5">
-                                            <p className="text-[12px] font-bold text-foreground truncate">{job.title}</p>
-                                            <p className="text-[10px] text-muted-foreground font-semibold">{job.company}</p>
-                                            <p className="text-[11px] text-muted-foreground leading-relaxed">{job.matchReason}</p>
-                                          </div>
-                                          <span className="shrink-0 text-[10px] font-extrabold text-primary bg-primary/10 px-2 py-0.5 rounded-full">{job.score}%</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                  {/* Interview Score */}
-                                  {msg.isInterviewMode && msg.interviewScore !== undefined && (
-                                    <div className="mt-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-900/30 space-y-2">
-                                      <div className="flex items-center gap-2">
-                                        <span className="text-lg font-black text-emerald-600">{msg.interviewScore}/10</span>
-                                        <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">Interview Score</span>
-                                      </div>
-                                      {msg.interviewStrengths && (
-                                        <div>
-                                          <p className="text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400 mb-1 uppercase tracking-wider">✅ Strengths</p>
-                                          {msg.interviewStrengths.map((s, i) => <p key={i} className="text-[11px] text-muted-foreground">• {s}</p>)}
-                                        </div>
-                                      )}
-                                      {msg.interviewImprovements && (
-                                        <div className="mt-1">
-                                          <p className="text-[10px] font-extrabold text-amber-600 dark:text-amber-400 mb-1 uppercase tracking-wider">💡 Improvements</p>
-                                          {msg.interviewImprovements.map((s, i) => <p key={i} className="text-[11px] text-muted-foreground">• {s}</p>)}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <p className="text-sm leading-relaxed text-primary-foreground">{msg.text}</p>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {isAssistantTyping && (
-                        <div className="flex gap-4 p-4 rounded-2xl border bg-muted/10 border-border/40 justify-start">
-                          <div className="h-8 w-8 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0 animate-pulse">
-                            AI
-                          </div>
-                          <div className="flex items-center gap-1.5 pt-2">
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]"></span>
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]"></span>
-                            <span className="h-2 w-2 rounded-full bg-primary animate-bounce"></span>
-                          </div>
-                        </div>
-                      )}
-                      <div ref={chatEndRef} />
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-slate-200/50 dark:border-slate-800/80 p-4 bg-background">
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      handleSendMessage(chatInput);
-                    }}
-                  >
-                    <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-full px-5 py-2.5 transition-all duration-200 focus-within:ring-2 focus-within:ring-primary/10 focus-within:border-primary/40">
-                      <input
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        placeholder="Ask anything about your career (e.g. 'Review my resume', 'Suggest projects')..."
-                        disabled={isAssistantTyping}
-                        className="flex-1 bg-transparent text-sm text-foreground placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none border-none min-w-0 py-1"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!chatInput.trim() || isAssistantTyping}
-                        className="shrink-0 bg-primary hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-full w-10 h-10 flex items-center justify-center active:scale-95 transition-all duration-150 shadow-sm"
-                      >
-                        <Send className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </form>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {/* TAB: SAVED JOBS */}
-          {activeTab === "saved" && (
-            <div className="space-y-6">
-              <div className="flex flex-col gap-2">
-                <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                  <Bookmark className="h-6 w-6 text-primary fill-primary/10" />
-                  Saved Jobs
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  Your bookmarked jobs and internships that you've saved to apply to later.
-                </p>
-              </div>
-
-              {savedJobsLoading ? (
-                <div className="py-20 text-center space-y-4">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
-                  <p className="text-xs text-muted-foreground font-semibold">
-                    Loading bookmarked jobs...
-                  </p>
-                </div>
-              ) : savedJobs.length === 0 ? (
-                <Card className="p-12 text-center text-muted-foreground shadow-md border-dashed">
-                  <div className="max-w-xs mx-auto space-y-2">
-                    <Bookmark className="h-8 w-8 text-muted-foreground mx-auto" />
-                    <p className="font-semibold text-sm">No saved jobs yet</p>
-                    <p className="text-xs">
-                      When you match or search for jobs, click the bookmark icon to save them here.
-                    </p>
-                  </div>
-                </Card>
-              ) : (
-                <div className="grid w-full gap-5 sm:grid-cols-2 lg:grid-cols-3">
-                  {savedJobs.map((job, i) => (
-                    <Card
-                      key={i}
-                      className="group flex flex-col justify-between p-5 shadow-md hover:-translate-y-1 transition-all duration-300 border-border hover:border-primary/20 min-w-0"
-                    >
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <h3
-                              onClick={() => setSelectedJob(job)}
-                              className="font-bold text-foreground text-sm hover:text-primary hover:underline cursor-pointer truncate"
-                            >
-                              {job.title}
-                            </h3>
-                            <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
-                              <Briefcase className="h-3 w-3 shrink-0" />
-                              {job.company}
-                            </p>
-                          </div>
-                          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                            {job.score || "Match"}
-                          </span>
-                        </div>
-
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 truncate">
-                          <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          {job.location || "Remote"}
-                        </p>
-
-                        {job.skills && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {job.skills
-                              .split(",")
-                              .slice(0, 3)
-                              .map((s, idx) => (
-                                <span
-                                  key={idx}
-                                  className="bg-muted px-1.5 py-0.5 rounded text-[10px] text-muted-foreground"
-                                >
-                                  {s.trim()}
-                                </span>
-                              ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex gap-2 mt-4 pt-4 border-t border-border/60">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => toggleSaveJob(job)}
-                          className="h-9 w-9 rounded-lg text-destructive border-destructive/15 hover:bg-destructive/10 hover:border-destructive/30 shrink-0"
-                          title="Remove bookmark"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                        <a
-                          href={job.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={() => handleApplyClick(job)}
-                          className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-all h-9"
-                        >
-                          Apply Now
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB: APPLICATIONS TRACKER */}
-          {activeTab === "applications" && (
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex flex-col gap-2">
-                  <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                    <Briefcase className="h-6 w-6 text-primary" />
-                    Applications Tracker
-                  </h1>
-                  <p className="text-sm text-muted-foreground">
-                    Monitor your submitted job applications and active interview pipeline stages.
-                  </p>
-                </div>
-                <Button
-                  onClick={() => setShowAddAppModal(true)}
-                  className="rounded-xl font-bold shadow-sm self-start sm:self-auto"
-                >
-                  <Plus className="mr-1.5 h-4 w-4" />
-                  Track New Job
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { label: "Applied", count: applications.filter(a => a.status === "Applied").length, color: "text-blue-500 bg-blue-500/10 border-blue-500/20" },
-                  { label: "Interviewing", count: applications.filter(a => a.status === "Interviewing").length, color: "text-amber-500 bg-amber-500/10 border-amber-500/20" },
-                  { label: "Offers", count: applications.filter(a => a.status === "Offer").length, color: "text-emerald-500 bg-emerald-500/10 border-emerald-500/20" },
-                  { label: "Rejected", count: applications.filter(a => a.status === "Rejected").length, color: "text-rose-500 bg-rose-500/10 border-rose-500/20" }
-                ].map((stat, idx) => (
-                  <Card key={idx} className={`p-4 flex flex-col items-center justify-center border text-center ${stat.color} shadow-sm rounded-xl`}>
-                    <span className="text-2xl font-black">{stat.count}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider mt-0.5 opacity-80">{stat.label}</span>
-                  </Card>
-                ))}
-              </div>
-
-              {applications.length === 0 ? (
-                <Card className="p-12 text-center text-muted-foreground shadow-md border-dashed">
-                  <div className="max-w-xs mx-auto space-y-2">
-                    <Briefcase className="h-8 w-8 text-muted-foreground mx-auto" />
-                    <p className="font-semibold text-sm">No jobs tracked yet</p>
-                    <p className="text-xs">
-                      Click the button above to start tracking your job application statuses.
-                    </p>
-                  </div>
-                </Card>
-              ) : (
-                <div className="grid gap-5 sm:grid-cols-2">
-                  {applications.map((app) => (
-                    <Card key={app.id} className="p-5 shadow-md border-border flex flex-col justify-between space-y-4 hover:border-primary/20 transition-all duration-300">
-                      <div className="space-y-2">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <h3 className="font-bold text-foreground text-sm truncate max-w-[200px]" title={app.role}>
-                              {app.role}
-                            </h3>
-                            <p className="text-xs text-muted-foreground font-semibold flex items-center gap-1.5 mt-0.5 truncate">
-                              <Layers className="h-4 w-4 text-primary" />
-                              {app.company}
-                            </p>
-                          </div>
-                          <Badge className={[
-                            "font-bold text-[10px] px-2 py-0.5 rounded-full border",
-                            app.status === "Applied" && "bg-blue-500/10 text-blue-500 border-blue-500/20",
-                            app.status === "Interviewing" && "bg-amber-500/10 text-amber-500 border-amber-500/20",
-                            app.status === "Offer" && "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-                            app.status === "Rejected" && "bg-rose-500/10 text-rose-500 border-rose-500/20",
-                          ].join(" ")}>
-                            {app.status}
-                          </Badge>
-                        </div>
-
-                        <div className="flex flex-col gap-1 text-[11px] text-muted-foreground pt-1">
-                          <div className="flex items-center gap-1.5">
-                            <MapPin className="h-4 w-4 text-muted-foreground/75" />
-                            {app.location || "Remote"}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Briefcase className="h-4 w-4 text-muted-foreground/75" />
-                            Applied: {app.applied_at}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 border-t border-border pt-4">
-                        <div className="flex-1">
-                          <select
-                            value={app.status}
-                            onChange={(e) => updateApplicationStatus(app.id, e.target.value as AppStatus)}
-                            className="w-full bg-background border border-input rounded-lg h-9 px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                          >
-                            <option value="Applied">Applied</option>
-                            <option value="Interviewing">Interviewing</option>
-                            <option value="Offer">Offer</option>
-                            <option value="Rejected">Rejected</option>
-                          </select>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteApplication(app.id)}
-                          className="h-9 w-9 rounded-lg text-destructive hover:bg-destructive/10 border border-transparent hover:border-destructive/15 shrink-0"
-                          title="Remove application"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              )}
-
-              {/* Add Application Dialog */}
-              <Dialog open={showAddAppModal} onOpenChange={setShowAddAppModal}>
-                <DialogContent className="max-w-md bg-card border border-border shadow-2xl rounded-2xl">
-                  <DialogHeader>
-                    <DialogTitle className="text-lg font-bold text-foreground">Track New Application</DialogTitle>
-                    <DialogDescription className="text-xs text-muted-foreground">
-                      Enter the details of the job application you want to track.
-                    </DialogDescription>
-                  </DialogHeader>
-
-                  <div className="space-y-4 py-2">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="companyName" className="text-xs">Company Name</Label>
-                      <Input
-                        id="companyName"
-                        value={newAppName}
-                        onChange={(e) => setNewAppName(e.target.value)}
-                        placeholder="Google, Linear, Stripe..."
-                        className="h-10"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label htmlFor="roleTitle" className="text-xs">Job Title / Role</Label>
-                      <Input
-                        id="roleTitle"
-                        value={newAppRole}
-                        onChange={(e) => setNewAppRole(e.target.value)}
-                        placeholder="Frontend Engineer, UI/UX Designer..."
-                        className="h-10"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="appLocation" className="text-xs">Location</Label>
-                        <Input
-                          id="appLocation"
-                          value={newAppLocation}
-                          onChange={(e) => setNewAppLocation(e.target.value)}
-                          placeholder="Remote, NYC, etc."
-                          className="h-10"
-                        />
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <Label htmlFor="appStatus" className="text-xs">Status</Label>
-                        <select
-                          id="appStatus"
-                          value={newAppStatus}
-                          onChange={(e) => setNewAppStatus(e.target.value as AppStatus)}
-                          className="w-full bg-background border border-input rounded-lg h-10 px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="Applied">Applied</option>
-                          <option value="Interviewing">Interviewing</option>
-                          <option value="Offer">Offer</option>
-                          <option value="Rejected">Rejected</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  <DialogFooter className="flex gap-2 border-t border-border pt-4">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setShowAddAppModal(false);
-                        setNewAppName("");
-                        setNewAppRole("");
-                        setNewAppLocation("");
-                        setNewAppStatus("Applied");
-                      }}
-                      className="flex-1 rounded-xl h-10 font-bold"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        if (!newAppName.trim() || !newAppRole.trim()) {
-                          toast.error("Please fill in Company Name and Role!");
-                          return;
-                        }
-                        addApplication(newAppName, newAppRole, newAppStatus, newAppLocation);
-                        setShowAddAppModal(false);
-                        setNewAppName("");
-                        setNewAppRole("");
-                        setNewAppLocation("");
-                        setNewAppStatus("Applied");
-                      }}
-                      className="flex-1 rounded-xl h-10 font-bold bg-primary text-primary-foreground shadow-md hover:opacity-90 transition-all"
-                    >
-                      Save Application
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-            </div>
-          )}
-
-          {/* TAB: MY PROFILE */}
-          {activeTab === "profile" && (
-            <div className="space-y-6">
-              <div className="flex flex-col gap-2">
-                <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-                  <UserIcon className="h-6 w-6 text-primary" />
-                  My Profile & Preferences
-                </h1>
-                <p className="text-sm text-muted-foreground">
-                  Update your background, professional experiences, and target preferences to align
-                  AI recommendation criteria.
-                </p>
-              </div>
-
-              <div className="grid gap-6 md:grid-cols-3">
-                <Card className="p-6 h-fit text-center space-y-4 shadow-md border-border">
-                  <div className="relative inline-block mx-auto">
-                    <div className="h-20 w-20 rounded-full bg-primary/15 flex items-center justify-center text-primary text-3xl font-extrabold shadow-inner mx-auto">
-                      {profile?.full_name?.charAt(0).toUpperCase() ||
-                        user?.email?.charAt(0).toUpperCase() ||
-                        "U"}
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-foreground text-lg leading-tight">
-                      {profile?.full_name || "New Matcher"}
-                    </h3>
-                    <p className="text-xs text-muted-foreground">{user?.email}</p>
-                  </div>
-
-                  <div className="border-t border-border pt-4 text-left space-y-3">
-                    <div>
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
-                        Resume Loaded
-                      </span>
-                      <span className="text-xs font-semibold text-foreground flex items-center gap-1.5 mt-0.5">
-                        <FileSpreadsheet className="h-4 w-4 text-primary" />
-                        {profile?.resume_name || "No resume uploaded"}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
-                        Baseline ATS Score
-                      </span>
-                      <span className="text-xs font-bold text-foreground flex items-center gap-1.5 mt-0.5">
-                        <Sparkles className="h-4 w-4 text-primary" />
-                        {profile?.ats_score ? `${profile.ats_score}%` : "Not evaluated yet"}
-                      </span>
-                    </div>
-                  </div>
-                </Card>
-
-                <Card className="p-6 md:col-span-2 shadow-md border-border">
-                  <form onSubmit={handleProfileSave} className="space-y-5">
-                    <div className="space-y-2">
-                      <Label htmlFor="fullName">Full Name</Label>
-                      <Input
-                        id="fullName"
-                        name="fullName"
-                        defaultValue={profile?.full_name || ""}
-                        placeholder="John Doe"
-                        required
-                        className="h-10"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="experienceLevel">Experience Level</Label>
-                        <select
-                          id="experienceLevel"
-                          name="experienceLevel"
-                          defaultValue={profile?.experience_level || "Freshman/Student"}
-                          className="w-full bg-background border border-input rounded-lg h-10 px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="Freshman/Student">Student / Freshman</option>
-                          <option value="Internship / Entry Level">Entry / Intern Level</option>
-                          <option value="Associate / Junior">Junior / Associate</option>
-                          <option value="Mid-Level">Mid-Level Developer</option>
-                        </select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="jobType">Preferred Job Type</Label>
-                        <select
-                          id="jobType"
-                          name="jobType"
-                          defaultValue={profile?.job_type || "All"}
-                          className="w-full bg-background border border-input rounded-lg h-10 px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="All">All Classifications</option>
-                          <option value="Full-time">Full-time Roles</option>
-                          <option value="Internship">Internships Only</option>
-                          <option value="Remote">Remote Roles Only</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="preferredRole">Target Job Title</Label>
-                        <Input
-                          id="preferredRole"
-                          name="preferredRole"
-                          defaultValue={profile?.preferred_role || ""}
-                          placeholder="Frontend Developer"
-                          className="h-10"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="preferredLocation">Target City / State</Label>
-                        <Input
-                          id="preferredLocation"
-                          name="preferredLocation"
-                          defaultValue={profile?.preferred_location || ""}
-                          placeholder="Remote / New York"
-                          className="h-10"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="skills">Professional Skills (comma separated)</Label>
-                      <textarea
-                        id="skills"
-                        name="skills"
-                        rows={3}
-                        defaultValue={profile?.skills || ""}
-                        placeholder="React, CSS, JavaScript, HTML, TypeScript..."
-                        className="w-full bg-background border border-input rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/60"
-                      />
-                    </div>
-
-                    <Button
+                    {/* Save Changes button with SUCCESS checkmark animation */}
+                    <button
                       type="submit"
                       disabled={isSavingProfile}
-                      className="h-10 px-5 rounded-xl font-bold w-full sm:w-auto shadow-sm"
+                      className="w-full h-12 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white text-xs font-bold shadow-md hover:scale-105 active:scale-95 transition-transform flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      {isSavingProfile && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                      Save Profile Updates
-                    </Button>
+                      {isSavingProfile ? (
+                        "Updating database profile..."
+                      ) : saveSuccess ? (
+                        <span className="flex items-center gap-2 text-[#10b981] font-black">
+                          <CheckCircle className="w-5 h-5 animate-draw-tick text-[#10b981]" />
+                          Changes Saved Successfully!
+                        </span>
+                      ) : (
+                        "Save Changes"
+                      )}
+                    </button>
                   </form>
-                </Card>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: SETTINGS */}
+          {activeTab === "settings" && (
+            <div className="space-y-6 max-w-2xl animate-in fade-in duration-300 select-none">
+              <div className="space-y-1.5">
+                <h3 className="text-xl font-bold text-white">System Settings</h3>
+                <p className="text-xs text-slate-400">Configure dashboard mock settings and reset test scenarios.</p>
+              </div>
+
+              <div className="glass-card rounded-2xl p-6 border border-white/5 space-y-6">
+                {/* Reset diagnostics */}
+                <div className="space-y-3">
+                  <h4 className="text-sm font-bold text-slate-200">Diagnostics & Sandbox resets</h4>
+                  <p className="text-xs text-slate-400">
+                    Wipe local storage caches to reset checklist completions, empty applications status boards and counters back to absolute 0.
+                  </p>
+
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    <button
+                      onClick={() => {
+                        setChecklist({
+                          resume: false,
+                          atsAudit: false,
+                          matchJobs: false,
+                          applyRoles: false,
+                        });
+                        setResumeFile(null);
+                        setSavedJobsList([]);
+                        setApplications([]);
+                        setProfileForm({
+                          fullName: "",
+                          email: "",
+                          experienceLevel: "Freshman/Student",
+                          preferredJobType: "Internship",
+                          targetJobTitle: "",
+                          targetCityState: "",
+                        });
+                        setSkillsList([]);
+                        toast.success("All checklist steps, stats, and profile fields reset to zero!");
+                      }}
+                      className="h-12 px-4 bg-[#ef4444]/15 border border-[#ef4444]/30 hover:bg-[#ef4444]/20 text-[#ef4444] text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                    >
+                      Reset Sandbox to Absolute 0
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setChecklist({
+                          resume: true,
+                          atsAudit: true,
+                          matchJobs: true,
+                          applyRoles: true,
+                        });
+                        setResumeFile({ name: "ramya_resume_2026.docx", size: "1.2 MB" });
+                        setProfileForm({
+                          fullName: "Ramya",
+                          email: "ramya@example.com",
+                          experienceLevel: "Freshman/Student",
+                          preferredJobType: "Internship",
+                          targetJobTitle: "Frontend Developer",
+                          targetCityState: "Remote",
+                        });
+                        setSkillsList(["React", "CSS", "TypeScript", "Tailwind"]);
+                        toast.success("All checklist steps marked as completed.");
+                      }}
+                      className="h-12 px-4 bg-[#10b981]/15 border border-[#10b981]/30 hover:bg-[#10b981]/20 text-[#10b981] text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                    >
+                      Complete All Checklist Steps
+                    </button>
+                  </div>
+                </div>
+
+                {/* Account details schema */}
+                <div className="space-y-2 border-t border-white/[0.04] pt-5">
+                  <h4 className="text-sm font-bold text-slate-200">Mock Data Settings</h4>
+                  <div className="flex items-center justify-between text-xs text-slate-400 bg-white/5 border border-white/5 rounded-xl p-4">
+                    <span>Demo Mode Enabled (Supabase configured fallback bypass)</span>
+                    <span className="px-2.5 py-1 rounded-full bg-[#8b5cf6]/10 text-[#3b82f6] font-extrabold border border-[#8b5cf6]/20 select-none">
+                      Mock Active
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
         </div>
       </main>
 
-      {/* JOB DETAIL DIALOG */}
-      <Dialog open={selectedJob !== null} onOpenChange={(open) => !open && setSelectedJob(null)}>
-        <DialogContent className="max-w-md bg-card border border-border shadow-2xl rounded-2xl">
-          {selectedJob && (
-            <>
-              <DialogHeader className="space-y-1.5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <DialogTitle className="text-lg font-bold text-foreground leading-tight">
-                      {selectedJob.title}
-                    </DialogTitle>
-                    <p className="text-sm font-semibold text-muted-foreground flex items-center gap-1.5 mt-1">
-                      <Briefcase className="h-4 w-4 text-primary shrink-0" />
-                      {selectedJob.company}
-                    </p>
-                  </div>
-                  <Badge className="shrink-0 bg-primary text-primary-foreground font-bold text-xs">
-                    {selectedJob.score || "Match"}
-                  </Badge>
-                </div>
-              </DialogHeader>
+      {/* MOBILE BOTTOM NAVIGATION BAR - collapses to 5 icons */}
+      <nav className="flex md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#07050f]/95 backdrop-blur-md border-t border-white/[0.08] justify-around items-center z-50 pb-safe shadow-lg select-none">
+        {navItems.slice(0, 5).map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className="flex flex-col items-center justify-center flex-1 h-full relative group cursor-pointer"
+              style={{ minHeight: "48px" }}
+            >
+              <Icon className={`h-5.5 w-5.5 transition-all duration-300 ${isActive ? 'text-[#8b5cf6] scale-110' : 'text-slate-400'}`} />
+              <span className={`text-[9px] font-bold mt-1 transition-colors ${isActive ? 'text-[#8b5cf6]' : 'text-slate-500'}`}>
+                {item.label}
+              </span>
+              {isActive && (
+                <span className="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-[#8b5cf6] shadow-[0_0_8px_#8b5cf6]" />
+              )}
+            </button>
+          );
+        })}
+      </nav>
 
-              <div className="space-y-4 py-2">
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <MapPin className="h-4 w-4 text-primary shrink-0" />
-                  {selectedJob.location || "Remote / Onsite"}
+      {/* QUICK ACTIONS MODALS DIALOG OVERLAYS */}
+      {/* 1. Roadmap Modal */}
+      {activeModal === "roadmap" && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => setActiveModal(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-[#10b981] select-none">
+              <Award className="h-5 w-5" />
+              <h3 className="font-extrabold text-white text-base">Frontend Dev Path Roadmap</h3>
+            </div>
+
+            <div className="space-y-4 select-none pt-2">
+              {[
+                { step: "Milestone 1", title: "HTML, CSS, Web Layouts", done: true, desc: "Verify basic box model layouts, flexbox, grid, and vanilla responsive media queries." },
+                { step: "Milestone 2", title: "React, State & Lifecycle Hooks", done: true, desc: "Master useState, useEffect, context provider wrappers, and state lifts." },
+                { step: "Milestone 3", title: "TypeScript & Data Types", done: false, desc: "Integrate static type checking, type interfaces, unions, generics and strict configurations." },
+                { step: "Milestone 4", title: "API Integration & NextJS SSR", done: false, desc: "Manage server-side rendering, routing boundaries, state mutations and Tanstack query caches." },
+              ].map((ms, i) => (
+                <div key={i} className="flex gap-3 relative">
+                  {i < 3 && <div className="absolute left-3.5 top-7 bottom-0 w-[2px] bg-white/5" />}
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 border z-10 text-xs font-bold ${ms.done ? "bg-[#10b981]/20 border-[#10b981] text-[#10b981]" : "bg-slate-900 border-white/10 text-slate-500"
+                    }`}>
+                    {ms.done ? "✓" : i + 1}
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] font-bold text-[#8b5cf6] uppercase tracking-wide">{ms.step}</span>
+                    <h5 className="font-bold text-white text-xs">{ms.title}</h5>
+                    <p className="text-[10px] text-[#94a3b8] leading-normal">{ms.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Interview Prep Modal */}
+      {activeModal === "interview" && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => setActiveModal(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-[#f59e0b] select-none">
+              <FileSignature className="h-5 w-5" />
+              <h3 className="font-extrabold text-white text-base">Interview Prep Simulator</h3>
+            </div>
+
+            <div className="space-y-4 select-none pt-2">
+              <div className="p-4 bg-white/5 border border-white/5 rounded-xl space-y-2">
+                <span className="text-[10px] font-bold text-[#f59e0b] uppercase tracking-widest">Question of the Day:</span>
+                <h5 className="font-bold text-white text-xs leading-normal">
+                  What is the difference between client-side state management (useState/Context) and server cache state management (React Query)?
+                </h5>
+              </div>
+
+              <div className="space-y-2 text-[11px] text-[#94a3b8] leading-relaxed">
+                <p>
+                  <strong>Client-Side State:</strong> Holds UI/layout states, form data, and active toggles locally within application memory.
+                </p>
+                <p>
+                  <strong>Server Cache State:</strong> Handles remote endpoints synchronization, client caching, request deduplication, invalidations and background stale fetches.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  toast.success("Mock answer submitted!", { description: "Evaluating semantic match score..." });
+                  setActiveModal(null);
+                }}
+                className="w-full h-12 rounded-xl bg-[#8b5cf6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
+              >
+                Submit Mock Answer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Salary Insights Modal */}
+      {activeModal === "salary" && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => text => setActiveModal(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-[#8b5cf6] select-none">
+              <DollarSign className="h-5 w-5" />
+              <h3 className="font-extrabold text-white text-base">Salary Insights Index</h3>
+            </div>
+
+            <div className="space-y-4 select-none pt-2">
+              <p className="text-xs text-slate-400">Regional entry-level developer pay structures matched vs tech stack requirements.</p>
+
+              <div className="space-y-3">
+                {[
+                  { role: "React Developer Intern", rate: "$35 - $50 / hr", location: "Remote / US-based" },
+                  { role: "Junior Software Engineer", rate: "$85k - $110k / yr", location: "Hybrid / SF Bay Area" },
+                  { role: "NodeJS Backend Developer", rate: "$90k - $115k / yr", location: "Onsite / Seattle" },
+                ].map((s, idx) => (
+                  <div key={idx} className="p-3 bg-white/5 border border-white/5 rounded-xl flex justify-between items-center text-xs">
+                    <div>
+                      <h5 className="font-bold text-white">{s.role}</h5>
+                      <span className="text-[10px] text-slate-500">{s.location}</span>
+                    </div>
+                    <span className="font-black text-[#8b5cf6]">{s.rate}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. LinkedIn Optimizer Modal */}
+      {activeModal === "linkedin" && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => setActiveModal(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-[#3b82f6] select-none">
+              <Briefcase className="h-5 w-5" />
+              <h3 className="font-extrabold text-white text-base">LinkedIn Profile Keyword Tuner</h3>
+            </div>
+
+            <div className="space-y-4 select-none pt-2">
+              <p className="text-xs text-slate-400">AI suggested keywords to inject into your LinkedIn headline and summary to attract recruiter bots.</p>
+
+              <div className="p-4 bg-white/5 border border-white/5 rounded-xl space-y-3">
+                <span className="text-[10px] font-bold text-[#8b5cf6] uppercase tracking-widest">Recommended Headline Template:</span>
+                <p className="text-xs text-white leading-relaxed font-semibold">
+                  "Frontend Engineer Intern | React & TypeScript Developer | Passionate about building highly interactive web apps"
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Keywords to target:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {["React.js", "TypeScript", "Vite", "Supabase", "REST API", "Git", "Tailwind CSS"].map((kw, i) => (
+                    <span key={i} className="px-2 py-0.5 rounded bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 text-[10px] font-bold text-[#3b82f6]">
+                      {kw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Cover Letter Builder Modal */}
+      {activeModal === "coverletter" && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => setActiveModal(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-[#ef4444] select-none">
+              <FileText className="h-5 w-5" />
+              <h3 className="font-extrabold text-white text-base">Cover Letter Generator</h3>
+            </div>
+
+            <div className="space-y-4 select-none pt-2">
+              <p className="text-xs text-slate-400">Generate a custom cover letter tailormade for Frontend roles.</p>
+
+              <div className="p-4 bg-white/5 border border-white/5 rounded-xl h-44 overflow-y-auto custom-scrollbar space-y-2">
+                <p className="text-[10px] text-slate-300 leading-relaxed">
+                  Dear Hiring Committee,
+                </p>
+                <p className="text-[10px] text-slate-300 leading-relaxed">
+                  I am writing to express my strong interest in the Frontend Engineer Intern position. As a developer skilled in React, CSS and TypeScript, I specialize in crafting interactive interfaces and responsive layouts.
+                </p>
+                <p className="text-[10px] text-slate-300 leading-relaxed">
+                  Your team's focus on building high-performance products matches my commitment to coding clean, modular systems. Thank you for your time and consideration.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  toast.success("Cover letter copied to clipboard!", { description: "AI template saved." });
+                  setActiveModal(null);
+                }}
+                className="w-full h-12 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
+              >
+                Copy to Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TRACK NEW JOB FORM MODAL */}
+      {showTrackModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+            <button
+              onClick={() => setShowTrackModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <h3 className="font-extrabold text-white text-base select-none">
+              Track New Job Application
+            </h3>
+
+            <form onSubmit={handleAddApplication} className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="track-comp" className="text-xs font-bold text-slate-300">Company Name *</Label>
+                <Input
+                  id="track-comp"
+                  type="text"
+                  required
+                  placeholder="e.g. OpenAI"
+                  value={newAppForm.company}
+                  onChange={(e) => setNewAppForm({ ...newAppForm, company: e.target.value })}
+                  className="bg-[#15122e] border-white/10 text-white rounded-xl text-xs h-12"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="track-role" className="text-xs font-bold text-slate-300">Job Title *</Label>
+                <Input
+                  id="track-role"
+                  type="text"
+                  required
+                  placeholder="e.g. Fullstack Intern"
+                  value={newAppForm.role}
+                  onChange={(e) => setNewAppForm({ ...newAppForm, role: e.target.value })}
+                  className="bg-[#15122e] border-white/10 text-white rounded-xl text-xs h-12"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="track-status" className="text-xs font-bold text-slate-300">Status Stage</Label>
+                  <select
+                    id="track-status"
+                    value={newAppForm.status}
+                    onChange={(e) => setNewAppForm({ ...newAppForm, status: e.target.value })}
+                    className="h-12 w-full bg-[#15122e] border border-white/10 text-white rounded-xl text-xs px-3 outline-none cursor-pointer"
+                  >
+                    <option value="Applied">Applied</option>
+                    <option value="Under Review">Under Review</option>
+                    <option value="Interview">Interview</option>
+                    <option value="Rejected">Rejected</option>
+                    <option value="Offer">Offer</option>
+                  </select>
                 </div>
 
                 <div className="space-y-1.5">
-                  <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                    Required Skills
-                  </h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedJob.skills ? (
-                      selectedJob.skills.split(",").map((s, idx) => (
-                        <Badge key={idx} variant="secondary" className="text-[10px] px-2 py-0.5">
-                          {s.trim()}
-                        </Badge>
-                      ))
-                    ) : (
-                      <span className="text-xs text-muted-foreground italic">None listed.</span>
-                    )}
-                  </div>
+                  <Label htmlFor="track-sal" className="text-xs font-bold text-slate-300">Salary Range</Label>
+                  <Input
+                    id="track-sal"
+                    type="text"
+                    placeholder="e.g. $45/hr"
+                    value={newAppForm.salary}
+                    onChange={(e) => setNewAppForm({ ...newAppForm, salary: e.target.value })}
+                    className="bg-[#15122e] border-white/10 text-white rounded-xl text-xs h-12"
+                  />
                 </div>
-
-                {selectedJob.description && (
-                  <div className="space-y-1.5">
-                    <h4 className="text-xs font-bold text-foreground uppercase tracking-wider">
-                      Job Description
-                    </h4>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {selectedJob.description}
-                    </p>
-                  </div>
-                )}
-
-                {selectedJob.matchReasons && selectedJob.matchReasons.length > 0 && (
-                  <div className="space-y-1.5">
-                    <h4 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1">
-                      <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
-                      AI Match Analysis
-                    </h4>
-                    <ul className="space-y-2 bg-muted/40 dark:bg-muted/10 p-3 rounded-xl border border-border/40 text-left">
-                      {selectedJob.matchReasons.map((reason, idx) => (
-                        <li key={idx} className="text-xs leading-relaxed text-muted-foreground flex items-start gap-2">
-                          <span className="text-primary font-bold mt-0.5 shrink-0">•</span>
-                          <span>{reason}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
 
-              <DialogFooter className="flex gap-2 border-t border-border pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    toggleSaveJob(selectedJob);
-                    setSelectedJob(null);
-                  }}
-                  className="flex-1 rounded-xl h-10 font-bold"
-                >
-                  {savedJobs.some((sj) => sj.url === selectedJob.url) ? (
-                    <>
-                      <BookmarkCheck className="mr-1.5 h-4 w-4 text-primary fill-primary" />
-                      Bookmarked
-                    </>
-                  ) : (
-                    <>
-                      <Bookmark className="mr-1.5 h-4 w-4" />
-                      Save Job
-                    </>
-                  )}
-                </Button>
-                <a
-                  href={selectedJob.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-primary text-primary-foreground font-bold hover:opacity-90 transition-all h-10 text-sm shadow-sm"
-                  onClick={() => {
-                    handleApplyClick(selectedJob);
-                    setSelectedJob(null);
-                  }}
-                >
-                  Apply Directly
-                  <ExternalLink className="h-4 w-4" />
-                </a>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+              <div className="space-y-1.5">
+                <Label htmlFor="track-date" className="text-xs font-bold text-slate-300">Date Applied</Label>
+                <Input
+                  id="track-date"
+                  type="date"
+                  value={newAppForm.date}
+                  onChange={(e) => setNewAppForm({ ...newAppForm, date: e.target.value })}
+                  className="bg-[#15122e] border-white/10 text-white rounded-xl text-xs h-12"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="track-notes" className="text-xs font-bold text-slate-300">Notes / Remarks</Label>
+                <textarea
+                  id="track-notes"
+                  placeholder="e.g. Referred by recruiter..."
+                  value={newAppForm.notes}
+                  onChange={(e) => setNewAppForm({ ...newAppForm, notes: e.target.value })}
+                  className="w-full bg-[#15122e] border border-white/10 text-white rounded-xl text-xs p-3 h-20 outline-none focus:ring-2 focus:ring-[#8b5cf6]/30 resize-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full h-12 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white text-xs font-bold active:scale-95 transition-transform cursor-pointer"
+              >
+                Track Application
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// Inner helper component for Quick Action Cards
+interface QuickActionCardProps {
+  title: string;
+  subtitle: string;
+  emoji: string;
+  gradientClass: string;
+  onClick: () => void;
+}
+
+function QuickActionCard({ title, subtitle, emoji, gradientClass, onClick }: QuickActionCardProps) {
+  return (
+    <RippleCard
+      onClick={onClick}
+      className={`relative min-h-[160px] rounded-2xl p-5 overflow-hidden group transition-all duration-300 bg-gradient-to-br ${gradientClass} border border-white/10 hover:border-white/20 hover:scale-[1.04] hover:shadow-[0_0_25px_rgba(201,168,76,0.3)] flex flex-col justify-between shrink-0 w-[240px] snap-start md:w-auto md:shrink`}
+    >
+      <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
+
+      <div className="flex justify-between items-start select-none">
+        <span className="text-3xl filter drop-shadow-md select-none">{emoji}</span>
+        <span className="text-[9px] uppercase font-black tracking-wider bg-white/25 text-white px-2 py-0.5 rounded-full hover-shimmer shadow-sm backdrop-blur-sm flex items-center gap-1 border border-white/20 animate-pulse">
+          ⚡ AI SPARK
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-1 relative">
+        <h4 className="font-extrabold text-white text-[13px] tracking-tight leading-snug select-none">
+          {title}
+        </h4>
+        <p className="text-[10px] text-white/80 select-none font-medium leading-normal">
+          {subtitle}
+        </p>
+
+        <div className="absolute right-0 bottom-0.5 opacity-0 transform translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300 text-white text-lg font-bold">
+          →
+        </div>
+      </div>
+    </RippleCard>
   );
 }

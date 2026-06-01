@@ -122,11 +122,53 @@ create policy "Users can manage their own ai analysis"
   using (auth.uid() = user_id);
 
 
--- 5. CHAT HISTORY
+-- 4.1. CAREER ANALYSIS
+create table if not exists public.career_analysis (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references public.users(id) on delete cascade not null,
+  session_id uuid references public.resume_sessions(id) on delete cascade,
+  resume_review jsonb,
+  ats_analysis jsonb,
+  skill_gap_analysis jsonb,
+  interview_practice jsonb,
+  career_roadmap jsonb,
+  salary_insights jsonb,
+  linkedin_optimization jsonb,
+  cover_letter jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.career_analysis enable row level security;
+
+drop policy if exists "Users can manage their own career analysis" on public.career_analysis;
+create policy "Users can manage their own career analysis"
+  on public.career_analysis for all
+  using (auth.uid() = user_id);
+
+
+-- 5. COACH CHAT SESSIONS (client session keys synced to chat_history)
+create table if not exists public.coach_chat_sessions (
+  id text primary key,
+  user_id uuid references public.users(id) on delete cascade not null,
+  title text not null default 'Career Coach',
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.coach_chat_sessions enable row level security;
+
+drop policy if exists "Users manage own coach sessions" on public.coach_chat_sessions;
+create policy "Users manage own coach sessions"
+  on public.coach_chat_sessions for all
+  using (auth.uid() = user_id);
+
+-- 6. CHAT HISTORY
 create table if not exists public.chat_history (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid references public.users(id) on delete cascade not null,
-  session_id uuid references public.resume_sessions(id) on delete cascade, -- Nullable if chat occurs outside specific sessions
+  session_id uuid references public.resume_sessions(id) on delete cascade,
+  coach_session_id text,
+  action_type text,
   
   role text check (role in ('user', 'assistant')),
   message text,
@@ -141,6 +183,24 @@ alter table public.chat_history enable row level security;
 drop policy if exists "Users can manage their own chat history" on public.chat_history;
 create policy "Users can manage their own chat history" 
   on public.chat_history for all 
+  using (auth.uid() = user_id);
+
+
+-- 6.1. CHAT MESSAGES
+create table if not exists public.chat_messages (
+  id uuid primary key default uuid_generate_v4(),
+  session_id text not null,
+  user_id uuid references public.users(id) on delete cascade not null,
+  role text check (role in ('user', 'assistant')),
+  message text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.chat_messages enable row level security;
+
+drop policy if exists "Users can manage their own chat messages" on public.chat_messages;
+create policy "Users can manage their own chat messages"
+  on public.chat_messages for all
   using (auth.uid() = user_id);
 
 
@@ -279,3 +339,8 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
+
+-- Helper for existing databases (adds missing columns if chat_history already exists)
+alter table if exists public.chat_history
+  add column if not exists coach_session_id text,
+  add column if not exists action_type text;
