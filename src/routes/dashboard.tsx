@@ -10,8 +10,8 @@ import { supabase } from "@/lib/supabase";
 import { AnalysisProvider, useAnalysis } from "@/hooks/use-analysis";
 import {
   isValidN8nPayload,
-  N8N_ANALYSIS_TIMEOUT_MS,
   N8N_WAIT_PIPELINE_STEPS,
+  buildStorageDocument,
   flattenN8nPayload,
   parseN8nResponse,
   SERVICE_UNAVAILABLE_MESSAGE,
@@ -597,13 +597,10 @@ function DashboardLayout() {
     const formData = new FormData();
     formData.append("resume", file);
 
-    const uploadToastId = toast.loading("Analyzing with n8n…", {
-      description: "Please wait — AI processing can take up to 2 minutes.",
+    const uploadToastId = toast.loading("Waiting for n8n…", {
+      description: "Stay on this page until the workflow returns your analysis.",
       duration: Infinity,
     });
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), N8N_ANALYSIS_TIMEOUT_MS);
 
     let waitStepIndex = 0;
     const progressTimer = setInterval(() => {
@@ -621,7 +618,6 @@ function DashboardLayout() {
 
     const failAnalysis = (restoreFile: boolean) => {
       clearInterval(progressTimer);
-      clearTimeout(timeoutId);
       setIsScraping(false);
       setPipelineStatus({
         step: "failed",
@@ -646,13 +642,12 @@ function DashboardLayout() {
         isFallback: false,
       });
 
+      // No client timeout — wait until n8n "Respond to Webhook" returns the JSON body
       const response = await fetch(API_URL, {
         method: "POST",
         body: formData,
-        signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
       clearInterval(progressTimer);
 
       console.group("UPLOAD DEBUG");
@@ -697,9 +692,11 @@ function DashboardLayout() {
         }));
       }
 
-      if (!isMockMode && user) {
-        const saved = await saveAnalysis(parsed.analysis);
-        if (!saved) {
+      const document = buildStorageDocument(responseData);
+
+      if (user) {
+        const saved = await saveAnalysis(document);
+        if (!saved && !isMockMode) {
           throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
         }
       }
@@ -710,15 +707,18 @@ function DashboardLayout() {
       setPipelineStatus({
         step: "complete",
         progress: 100,
-        details: `Done — ${parsed.jobs.length} jobs and ${parsed.internships.length} internships matched.`,
+        details: `Done — ${parsed.jobs.length} jobs and ${parsed.internships.length} internships · all career sections saved.`,
         isFallback: false,
       });
 
       console.log("n8n analysis applied:", {
         jobs: parsed.jobs.length,
         internships: parsed.internships.length,
-        skills: parsed.analysis.skills?.length,
-        ats: parsed.analysis.atsScore?.score,
+        skills: document.skills?.length,
+        ats: document.atsScore?.score,
+        linkedin: !!document.linkedinOptimization,
+        interview: !!document.interviewPractice,
+        coverLetter: !!document.coverLetterGenerator?.letter,
       });
 
       toast.success("Analysis complete", {
@@ -1918,6 +1918,9 @@ function DashboardLayout() {
                 parsedSkills={skillsList}
                 jobs={jobsList}
                 internships={internshipsList}
+                savedJobsList={savedJobsList}
+                onSaveJob={handleSaveJobToggle}
+                onApplyJob={handleQuickApplyJob}
               />
             ) : null,
           )}

@@ -2,29 +2,132 @@ import type { AnalysisData } from "@/hooks/use-analysis";
 import type { StoredAnalysis } from "@/lib/career-coach/types";
 import { normalizeJob, type TrackedJob } from "@/lib/job-tracker";
 
-export const N8N_ANALYSIS_TIMEOUT_MS = 180_000; // n8n workflow can run ~2 minutes
 export const SERVICE_UNAVAILABLE_MESSAGE = "Service unavailable. Try again later.";
 
-/** Unwrap n8n body: single object, `{ data }`, or `[{ ... }]` */
+const CAREER_FIELD_KEYS = [
+  "skills",
+  "roles",
+  "keywords",
+  "experience",
+  "resumeReview",
+  "resume_review",
+  "atsScore",
+  "ats_score",
+  "skillGapAnalysis",
+  "skill_gap_analysis",
+  "careerRoadmap",
+  "career_roadmap",
+  "interviewPractice",
+  "interview_practice",
+  "salaryInsights",
+  "salary_insights",
+  "linkedinOptimization",
+  "linkedin_optimization",
+  "coverLetterGenerator",
+  "cover_letter_generator",
+  "coverLetter",
+] as const;
+
+/** n8n often returns lists as `{ "0": "a", "1": "b" }` */
+export function asStringList(val: unknown): string[] {
+  if (!val) return [];
+  if (Array.isArray(val)) {
+    return val.map((v) => String(v).trim()).filter(Boolean);
+  }
+  if (typeof val === "string") {
+    const t = val.trim();
+    if (!t) return [];
+    if (t.startsWith("[") || t.startsWith("{")) {
+      try {
+        return asStringList(JSON.parse(t));
+      } catch {
+        return t.split(/[\n,;|]/).map((s) => s.trim()).filter(Boolean);
+      }
+    }
+    return t.split(/[\n,;|]/).map((s) => s.trim()).filter(Boolean);
+  }
+  if (typeof val === "object") {
+    const o = val as Record<string, unknown>;
+    const numericKeys = Object.keys(o).filter((k) => /^\d+$/.test(k));
+    if (numericKeys.length > 0) {
+      return numericKeys
+        .sort((a, b) => Number(a) - Number(b))
+        .map((k) => String(o[k]).trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function parseNestedRecord(val: unknown): Record<string, unknown> | undefined {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === "string") {
+    const t = val.trim();
+    if (!t) return undefined;
+    try {
+      return parseNestedRecord(JSON.parse(t));
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof val === "object" && !Array.isArray(val)) {
+    return val as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function pickField(payload: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    const val = payload[key];
+    if (val !== undefined && val !== null && val !== "") return val;
+  }
+  return undefined;
+}
+
+function pickObject<T>(payload: Record<string, unknown>, ...keys: string[]): T | undefined {
+  const val = pickField(payload, ...keys);
+  if (!val) return undefined;
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (parsed && typeof parsed === "object") return parsed as T;
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof val === "object") return val as T;
+  return undefined;
+}
+
+/** Unwrap n8n body — merge array items (jobs in [0], career in [1], etc.) */
 export function unwrapN8nPayload(raw: unknown): Record<string, unknown> {
   if (!raw) return {};
   if (Array.isArray(raw)) {
-    const first = raw[0];
-    if (first && typeof first === "object" && !Array.isArray(first)) {
-      return first as Record<string, unknown>;
-    }
-    return {};
+    return raw.reduce<Record<string, unknown>>((acc, item) => {
+      const part = unwrapN8nPayload(item);
+      return { ...acc, ...part };
+    }, {});
   }
   if (typeof raw === "object") {
     const o = raw as Record<string, unknown>;
-    if (o.data && typeof o.data === "object" && !Array.isArray(o.data)) {
-      return o.data as Record<string, unknown>;
+    if (o.data && typeof o.data === "object") {
+      return { ...unwrapN8nPayload(o.data), ...o };
     }
-    if (o.json && typeof o.json === "object") {
-      return unwrapN8nPayload(o.json);
+    if (o.json !== undefined) {
+      const inner = unwrapN8nPayload(o.json);
+      return { ...inner, ...o };
     }
-    if (o.body && typeof o.body === "object") {
-      return unwrapN8nPayload(o.body);
+    if (o.body !== undefined) {
+      const inner = unwrapN8nPayload(o.body);
+      return { ...inner, ...o };
+    }
+    if (o.output !== undefined) {
+      const inner = unwrapN8nPayload(o.output);
+      return { ...inner, ...o };
+    }
+    if (o.result !== undefined) {
+      const inner = unwrapN8nPayload(o.result);
+      return { ...inner, ...o };
     }
     return o;
   }
@@ -40,31 +143,55 @@ export function unwrapN8nPayload(raw: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Merge `resumeData` (skills, ATS, etc.) with top-level webhook fields */
+/** Flatten resumeData (object or JSON string), output, and root career fields */
 export function flattenN8nPayload(raw: unknown): Record<string, unknown> {
   const root = unwrapN8nPayload(raw);
-  const resumeData = (root.resumeData ?? root.resume_data) as Record<string, unknown> | undefined;
-  if (!resumeData || typeof resumeData !== "object") {
-    return root;
-  }
+
+  const layers: Record<string, unknown>[] = [
+    parseNestedRecord(root.output) ?? {},
+    parseNestedRecord(root.result) ?? {},
+    parseNestedRecord(root.careerAnalysis) ?? {},
+    parseNestedRecord(root.career_analysis) ?? {},
+    parseNestedRecord(root.resumeData) ?? {},
+    parseNestedRecord(root.resume_data) ?? {},
+    root,
+  ];
+
+  const merged = layers.reduce<Record<string, unknown>>(
+    (acc, layer) => ({ ...acc, ...layer }),
+    {},
+  );
+
   return {
-    ...resumeData,
-    ...root,
-    // Prefer explicit job lists on root, then resumeData
-    topJobs: root.topJobs ?? root.top_jobs ?? resumeData.topJobs ?? resumeData.jobs,
-    jobs: root.jobs ?? resumeData.jobs,
+    ...merged,
+    topJobs:
+      pickField(root, "topJobs", "top_jobs") ??
+      pickField(merged, "topJobs", "top_jobs", "jobs"),
+    jobs: pickField(root, "jobs") ?? pickField(merged, "jobs"),
     internships:
-      root.internships ?? root.internship ?? resumeData.internships ?? resumeData.internship,
-    skills: resumeData.skills ?? root.skills,
-    resumeReview: resumeData.resumeReview ?? root.resumeReview,
-    atsScore: resumeData.atsScore ?? root.atsScore,
-    skillGapAnalysis: resumeData.skillGapAnalysis ?? root.skillGapAnalysis,
-    careerRoadmap: resumeData.careerRoadmap ?? root.careerRoadmap,
-    interviewPractice: resumeData.interviewPractice ?? root.interviewPractice,
-    salaryInsights: resumeData.salaryInsights ?? root.salaryInsights,
-    linkedinOptimization: resumeData.linkedinOptimization ?? root.linkedinOptimization,
-    coverLetterGenerator:
-      resumeData.coverLetterGenerator ?? root.coverLetterGenerator,
+      pickField(root, "internships", "internship") ??
+      pickField(merged, "internships", "internship"),
+    skills: pickField(merged, "skills"),
+    roles: pickField(merged, "roles"),
+    keywords: pickField(merged, "keywords"),
+    experience: pickField(merged, "experience"),
+    resumeReview: pickField(merged, "resumeReview", "resume_review"),
+    atsScore: pickField(merged, "atsScore", "ats_score"),
+    skillGapAnalysis: pickField(merged, "skillGapAnalysis", "skill_gap_analysis"),
+    careerRoadmap: pickField(merged, "careerRoadmap", "career_roadmap"),
+    interviewPractice: pickField(merged, "interviewPractice", "interview_practice"),
+    salaryInsights: pickField(merged, "salaryInsights", "salary_insights"),
+    linkedinOptimization: pickField(
+      merged,
+      "linkedinOptimization",
+      "linkedin_optimization",
+    ),
+    coverLetterGenerator: pickField(
+      merged,
+      "coverLetterGenerator",
+      "cover_letter_generator",
+      "coverLetter",
+    ),
   };
 }
 
@@ -79,6 +206,13 @@ export function asRecordList(val: unknown): Record<string, unknown>[] {
           ? (item as Record<string, unknown>)
           : { title: String(item) },
       );
+  }
+  if (typeof val === "string") {
+    try {
+      return asRecordList(JSON.parse(val));
+    } catch {
+      return [];
+    }
   }
   if (typeof val === "object") {
     const o = val as Record<string, unknown>;
@@ -106,7 +240,7 @@ function mapListing(
     ? reasons.map(String)
     : typeof reasons === "string"
       ? [reasons]
-      : [];
+      : asStringList(reasons);
 
   const tracked = normalizeJob(
     {
@@ -134,6 +268,11 @@ export type ParsedN8nPayload = {
   analysis: AnalysisData;
   jobs: TrackedJob[];
   internships: TrackedJob[];
+};
+
+export type AnalysisStorageDocument = AnalysisData & {
+  /** Full flattened n8n payload — used to re-hydrate all 9 tool pages on load */
+  _n8nFlat?: Record<string, unknown>;
 };
 
 export function isValidN8nPayload(parsed: ParsedN8nPayload): boolean {
@@ -165,34 +304,54 @@ export function parseN8nResponse(raw: unknown): ParsedN8nPayload {
   const jobs = jobRows.map((row, i) => mapListing(row, i, "job"));
   const internships = internshipRows.map((row, i) => mapListing(row, i, "internship"));
 
-  const skills = Array.isArray(payload.skills)
-    ? (payload.skills as unknown[]).map(String)
-    : typeof payload.skills === "string"
-      ? payload.skills.split(",").map((s) => s.trim()).filter(Boolean)
-      : [];
+  const skills = asStringList(payload.skills);
+  const roles = asStringList(payload.roles);
+  const keywords = asStringList(payload.keywords);
 
-  const roles = Array.isArray(payload.roles)
-    ? (payload.roles as unknown[]).map(String)
-    : asRecordList(payload.roles).map((r) => String(r.title ?? r.name ?? r));
-
-  const keywords = Array.isArray(payload.keywords)
-    ? (payload.keywords as unknown[]).map(String)
-    : [];
-
-  const resumeReview = (payload.resumeReview ?? payload.resume_review) as AnalysisData["resumeReview"];
-  const atsRaw = (payload.atsScore ?? payload.ats_score) as AnalysisData["atsScore"];
-  const skillGap = (payload.skillGapAnalysis ?? payload.skill_gap_analysis) as AnalysisData["skillGapAnalysis"];
-  const roadmap = (payload.careerRoadmap ?? payload.career_roadmap) as AnalysisData["careerRoadmap"];
-  const interview = (payload.interviewPractice ?? payload.interview_practice) as AnalysisData["interviewPractice"];
-  const salary = (payload.salaryInsights ?? payload.salary_insights) as AnalysisData["salaryInsights"];
-  const linkedin = (payload.linkedinOptimization ?? payload.linkedin_optimization) as AnalysisData["linkedinOptimization"];
-  const coverRoot = payload.coverLetterGenerator ?? payload.cover_letter_generator ?? payload.coverLetter;
-  const coverLetter =
-    typeof coverRoot === "object" && coverRoot !== null && "coverLetter" in (coverRoot as object)
-      ? (coverRoot as { coverLetter?: string }).coverLetter
-      : typeof coverRoot === "string"
-        ? coverRoot
-        : undefined;
+  const resumeReview = pickObject<AnalysisData["resumeReview"]>(
+    payload,
+    "resumeReview",
+    "resume_review",
+  );
+  const atsRaw = pickObject<AnalysisData["atsScore"]>(payload, "atsScore", "ats_score");
+  const skillGap = pickObject<AnalysisData["skillGapAnalysis"]>(
+    payload,
+    "skillGapAnalysis",
+    "skill_gap_analysis",
+  );
+  const roadmap = pickObject<AnalysisData["careerRoadmap"]>(
+    payload,
+    "careerRoadmap",
+    "career_roadmap",
+  );
+  const interview = pickObject<AnalysisData["interviewPractice"]>(
+    payload,
+    "interviewPractice",
+    "interview_practice",
+  );
+  const salary = pickObject<AnalysisData["salaryInsights"]>(
+    payload,
+    "salaryInsights",
+    "salary_insights",
+  );
+  const linkedin = pickObject<AnalysisData["linkedinOptimization"]>(
+    payload,
+    "linkedinOptimization",
+    "linkedin_optimization",
+  );
+  const coverRoot = pickField(
+    payload,
+    "coverLetterGenerator",
+    "cover_letter_generator",
+    "coverLetter",
+  );
+  let coverLetter: string | undefined;
+  if (typeof coverRoot === "object" && coverRoot !== null) {
+    const o = coverRoot as { coverLetter?: string; letter?: string };
+    coverLetter = o.coverLetter ?? o.letter;
+  } else if (typeof coverRoot === "string") {
+    coverLetter = coverRoot;
+  }
 
   const mapJobToAnalysis = (j: TrackedJob, kind: "job" | "internship") => ({
     title: j.title,
@@ -201,6 +360,7 @@ export function parseN8nResponse(raw: unknown): ParsedN8nPayload {
     salary: j.salary,
     matchScore: typeof j.score === "number" ? j.score : parseInt(String(j.score).replace("%", ""), 10) || 0,
     matchReason: j.matchReasons?.[0] || j.matchedSkills?.[0],
+    matchReasons: j.matchReasons?.length ? j.matchReasons : undefined,
     applyUrl: j.url,
     listingKind: kind,
   });
@@ -225,6 +385,43 @@ export function parseN8nResponse(raw: unknown): ParsedN8nPayload {
   return { analysis, jobs, internships };
 }
 
+/** Store complete career blob + flat payload so Supabase reload never drops fields */
+export function buildStorageDocument(raw: unknown): AnalysisStorageDocument {
+  const flat = flattenN8nPayload(raw);
+  const parsed = parseN8nResponse(flat);
+  return {
+    ...parsed.analysis,
+    _n8nFlat: flat,
+  };
+}
+
+/** Re-parse from DB — fixes older rows that only saved jobs without career sections */
+export function hydrateAnalysisFromDb(stored: unknown): AnalysisData | null {
+  if (!stored || typeof stored !== "object") return null;
+  const doc = stored as AnalysisStorageDocument;
+
+  if (doc._n8nFlat && typeof doc._n8nFlat === "object") {
+    return parseN8nResponse(doc._n8nFlat).analysis;
+  }
+
+  const fromStored = parseN8nResponse(stored);
+  if (
+    fromStored.analysis.linkedinOptimization ||
+    fromStored.analysis.resumeReview ||
+    fromStored.analysis.interviewPractice ||
+    (fromStored.analysis.skills?.length ?? 0) > 0
+  ) {
+    return fromStored.analysis;
+  }
+
+  const hasCareerKeys = CAREER_FIELD_KEYS.some((k) => (doc as Record<string, unknown>)[k]);
+  if (hasCareerKeys) {
+    return parseN8nResponse(stored).analysis;
+  }
+
+  return doc as AnalysisData;
+}
+
 /** Rebuild matcher lists from stored analysis_results JSON */
 export function trackedJobsFromAnalysis(analysis: AnalysisData | null): {
   jobs: TrackedJob[];
@@ -245,7 +442,11 @@ export function trackedJobsFromAnalysis(analysis: AnalysisData | null): {
           salary: j.salary,
           matchScore: j.matchScore,
           applyLink: j.applyUrl,
-          matchReasons: j.matchReason ? [j.matchReason] : [],
+          matchReasons: j.matchReasons?.length
+            ? j.matchReasons
+            : j.matchReason
+              ? [j.matchReason]
+              : [],
           type: kind === "internship" ? "Internship" : "Fullstack",
         },
         index,
@@ -304,7 +505,7 @@ export const N8N_WAIT_PIPELINE_STEPS: {
   {
     step: "analyzing",
     progress: 12,
-    details: "Uploading resume to n8n — this may take up to 2 minutes…",
+    details: "Uploading resume to n8n — waiting for workflow to finish…",
   },
   {
     step: "analyzing",
@@ -329,7 +530,7 @@ export const N8N_WAIT_PIPELINE_STEPS: {
   {
     step: "scoring",
     progress: 72,
-    details: "Generating career insights (roadmap, salary, interview)…",
+    details: "Generating career insights (roadmap, salary, interview, LinkedIn)…",
   },
   {
     step: "matching",

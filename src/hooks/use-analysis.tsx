@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { hydrateAnalysisFromDb } from "@/lib/n8n-response";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 
@@ -29,19 +30,21 @@ export interface AnalysisData {
     next6Months?: string[];
   };
   interviewPractice?: {
-    questions?: {
-      question?: string;
-      answerTips?: string;
-    }[];
+    technicalQuestions?: string[];
+    hrQuestions?: string[];
+    preparationTips?: string[];
+    questions?: { question?: string; answerTips?: string }[];
   };
   salaryInsights?: {
-    growthRanges?: {
-      title?: string;
-      range?: string;
-    }[];
+    entryLevelRange?: string;
+    growthPotential?: string;
+    growthRanges?: { title?: string; range?: string }[];
     forecasting?: string;
   };
   linkedinOptimization?: {
+    headlineSuggestions?: string[];
+    aboutSectionSuggestions?: string[];
+    profileImprovements?: string[];
     headline?: string;
     summary?: string;
     recruiterSearchTips?: string[];
@@ -56,6 +59,7 @@ export interface AnalysisData {
     salary?: string;
     matchScore?: number;
     matchReason?: string;
+    matchReasons?: string[];
     applyUrl?: string;
     listingKind?: "job" | "internship";
   }[];
@@ -66,6 +70,7 @@ export interface AnalysisData {
     salary?: string;
     matchScore?: number;
     matchReason?: string;
+    matchReasons?: string[];
     applyUrl?: string;
     listingKind?: "job" | "internship";
   }[];
@@ -108,7 +113,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (error) {
         console.error("Error fetching latest analysis results:", error);
       } else if (data && data.length > 0) {
-        setAnalysis(data[0].response_json as AnalysisData);
+        setAnalysis(hydrateAnalysisFromDb(data[0].response_json));
       } else {
         setAnalysis(null);
       }
@@ -128,14 +133,15 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [user, fetchLatestAnalysis]);
 
-  const saveAnalysis = async (data: AnalysisData): Promise<boolean> => {
+  const saveAnalysis = async (data: AnalysisData & { _n8nFlat?: Record<string, unknown> }): Promise<boolean> => {
     if (!user?.id) {
       toast.error("You must be logged in to save analysis.");
       return false;
     }
     if (!isConfigured) {
       // Local fallbacks if Supabase not configured
-      setAnalysis(data);
+      const hydrated = hydrateAnalysisFromDb(data);
+      setAnalysis(hydrated);
       return true;
     }
     try {
@@ -151,7 +157,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return false;
       }
 
-      setAnalysis(data);
+      setAnalysis(hydrateAnalysisFromDb(data));
       return true;
     } catch (err) {
       console.error("Exception saving analysis:", err);
