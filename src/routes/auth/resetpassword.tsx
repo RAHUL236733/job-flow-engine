@@ -31,6 +31,66 @@ function ResetPassword() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
 
+  // Keep the component in a loading state if we see recovery parameters in the URL on mount
+  const [verifyingSession, setVerifyingSession] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const hash = window.location.hash.substring(1);
+    const hasHashToken = hash.includes("access_token=");
+    const hasCodeParam = window.location.search.includes("code=");
+    return hasHashToken || hasCodeParam;
+  });
+
+  useEffect(() => {
+    const handleRecovery = async () => {
+      const hash = window.location.hash.substring(1);
+      const hashParams = new URLSearchParams(hash);
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+
+      const searchParams = new URLSearchParams(window.location.search);
+      const code = searchParams.get("code");
+
+      try {
+        if (accessToken && refreshToken) {
+          console.log("Detected recovery tokens in hash. Manually setting session...");
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (error) {
+            console.error("Error setting session from hash:", error);
+            toast.error("Verification failed", { description: error.message });
+          } else {
+            toast.success("Recovery session verified!");
+          }
+        } else if (code) {
+          console.log("Detected PKCE code in query. Manually exchanging code for session...");
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            console.error("Error exchanging code for session:", error);
+            toast.error("Verification failed", { description: error.message });
+          } else {
+            toast.success("Recovery session verified!");
+          }
+        }
+      } catch (err: any) {
+        console.error("Exception in manual session recovery:", err);
+      } finally {
+        setVerifyingSession(false);
+      }
+    };
+
+    const hash = window.location.hash.substring(1);
+    const hasHashToken = hash.includes("access_token=");
+    const hasCodeParam = window.location.search.includes("code=");
+
+    if (hasHashToken || hasCodeParam) {
+      handleRecovery();
+    } else {
+      setVerifyingSession(false);
+    }
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
@@ -109,7 +169,7 @@ function ResetPassword() {
                 </Button>
               </Link>
             </div>
-          ) : authLoading ? (
+          ) : (authLoading || verifyingSession) ? (
             <div className="flex flex-col items-center justify-center py-6 space-y-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">Verifying recovery session...</p>
