@@ -138,24 +138,58 @@ function isTransientSupabaseError(error: unknown): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function rowTimestamp(row: Record<string, unknown>, keys: string[]): number {
+  for (const key of keys) {
+    const raw = row[key];
+    if (raw == null || raw === "") continue;
+    const t = new Date(String(raw)).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  return 0;
+}
+
+function sortRowsByDateDesc(
+  rows: Record<string, unknown>[],
+  dateKeys: string[],
+): Record<string, unknown>[] {
+  return [...rows].sort((a, b) => {
+    const diff = rowTimestamp(b, dateKeys) - rowTimestamp(a, dateKeys);
+    if (diff !== 0) return diff;
+    return String(b.id ?? "").localeCompare(String(a.id ?? ""));
+  });
+}
+
+async function dedupeInflight<T>(
+  cache: Map<string, Promise<T>>,
+  userId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const existing = cache.get(userId);
+  if (existing) return existing;
+
+  const promise = run().finally(() => {
+    if (cache.get(userId) === promise) cache.delete(userId);
+  });
+  cache.set(userId, promise);
+  return promise;
+}
+
+const savedJobsInflight = new Map<string, Promise<TrackedJob[]>>();
+const applicationsInflight = new Map<string, Promise<TrackedApplication[]>>();
+
 export async function fetchSavedJobs(userId: string): Promise<TrackedJob[]> {
-  const primary = await supabase
-    .from("saved_jobs")
-    .select("*")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
-
-  if (!primary.error) {
-    return (primary.data || []).map((row) => rowToJob(row as Record<string, unknown>));
-  }
-
-  // Fallback for legacy schemas that may not have created_at
-  const fallback = await supabase.from("saved_jobs").select("*").eq("user_id", userId);
-  if (fallback.error) {
-    console.error("fetchSavedJobs:", fallback.error);
-    throw fallback.error;
-  }
-  return (fallback.data || []).map((row) => rowToJob(row as Record<string, unknown>));
+  return dedupeInflight(savedJobsInflight, userId, async () => {
+    const { data, error } = await supabase.from("saved_jobs").select("*").eq("user_id", userId);
+    if (error) {
+      console.error("fetchSavedJobs:", error);
+      throw error;
+    }
+    const rows = sortRowsByDateDesc((data || []) as Record<string, unknown>[], [
+      "created_at",
+      "updated_at",
+    ]);
+    return rows.map((row) => rowToJob(row));
+  });
 }
 
 export async function saveJobToStore(userId: string, job: TrackedJob): Promise<TrackedJob | null> {
@@ -246,25 +280,14 @@ export async function saveJobToStore(userId: string, job: TrackedJob): Promise<T
     .select("*")
     .eq("user_id", userId)
     .ilike("title", normalized.title)
-    .ilike("company", normalized.company)
-    .order("created_at", { ascending: false })
-    .limit(1);
+    .ilike("company", normalized.company);
 
   if (!existingByTitleCompany.error && (existingByTitleCompany.data || []).length > 0) {
-    return rowToJob((existingByTitleCompany.data || [])[0] as Record<string, unknown>);
-  }
-
-  // If created_at is unavailable in older schemas, retry without ordering.
-  const fallbackExisting = await supabase
-    .from("saved_jobs")
-    .select("*")
-    .eq("user_id", userId)
-    .ilike("title", normalized.title)
-    .ilike("company", normalized.company)
-    .limit(1);
-
-  if (!fallbackExisting.error && (fallbackExisting.data || []).length > 0) {
-    return rowToJob((fallbackExisting.data || [])[0] as Record<string, unknown>);
+    const [row] = sortRowsByDateDesc(
+      (existingByTitleCompany.data || []) as Record<string, unknown>[],
+      ["created_at", "updated_at"],
+    );
+    return rowToJob(row);
   }
 
   // Additional recovery for schemas keyed by URL.
@@ -314,23 +337,19 @@ export async function removeSavedJobFromStore(userId: string, job: TrackedJob): 
 }
 
 export async function fetchApplications(userId: string): Promise<TrackedApplication[]> {
-  const primary = await supabase
-    .from("applications")
-    .select("*")
-    .eq("user_id", userId)
-    .order("applied_date", { ascending: false });
-
-  if (!primary.error) {
-    return (primary.data || []).map((row) => rowToApplication(row as Record<string, unknown>));
-  }
-
-  // Fallback for legacy schemas that may not have applied_date
-  const fallback = await supabase.from("applications").select("*").eq("user_id", userId);
-  if (fallback.error) {
-    console.error("fetchApplications:", fallback.error);
-    throw fallback.error;
-  }
-  return (fallback.data || []).map((row) => rowToApplication(row as Record<string, unknown>));
+  return dedupeInflight(applicationsInflight, userId, async () => {
+    const { data, error } = await supabase.from("applications").select("*").eq("user_id", userId);
+    if (error) {
+      console.error("fetchApplications:", error);
+      throw error;
+    }
+    const rows = sortRowsByDateDesc((data || []) as Record<string, unknown>[], [
+      "applied_date",
+      "date",
+      "created_at",
+    ]);
+    return rows.map((row) => rowToApplication(row));
+  });
 }
 
 export async function insertApplication(

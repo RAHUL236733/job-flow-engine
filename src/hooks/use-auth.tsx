@@ -1,5 +1,13 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import {
+  applyTrialsGrantReset,
+  needsTrialsGrantReset,
+  persistTrialsUsed,
+  readTrialsUsed,
+  RESUME_TRIALS_GRANT_VERSION,
+  TRIALS_GRANT_METADATA_KEY,
+} from "@/lib/resume-trials";
 import { User, Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
 
@@ -45,6 +53,21 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function withSyncedTrialMetadata(user: User): User {
+  if (needsTrialsGrantReset(user.id, user.user_metadata)) {
+    applyTrialsGrantReset(user.id);
+  }
+  const used = readTrialsUsed(user.id, user.user_metadata);
+  return {
+    ...user,
+    user_metadata: {
+      ...user.user_metadata,
+      trials_used: used,
+      [TRIALS_GRANT_METADATA_KEY]: RESUME_TRIALS_GRANT_VERSION,
+    },
+  };
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -164,12 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (savedMockSession) {
         try {
           const parsed = JSON.parse(savedMockSession);
-          // Set mock trials
-          const mockTrials = Number(localStorage.getItem(`mock_trials_${parsed.user.id}`) || "0");
-          parsed.user.user_metadata = {
-            ...parsed.user.user_metadata,
-            trials_used: mockTrials
-          };
+          parsed.user = withSyncedTrialMetadata(parsed.user);
           setUser(parsed.user);
           setProfile(parsed.profile);
           userRef.current = parsed.user;
@@ -209,14 +227,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (currentSession?.user) {
         setIsLoading(true);
-        const p = await fetchProfile(currentSession.user.id);
+        let activeUser = currentSession.user;
+        if (needsTrialsGrantReset(activeUser.id, activeUser.user_metadata)) {
+          applyTrialsGrantReset(activeUser.id);
+          const { data: grantData, error: grantError } = await supabase.auth.updateUser({
+            data: {
+              trials_used: 0,
+              [TRIALS_GRANT_METADATA_KEY]: RESUME_TRIALS_GRANT_VERSION,
+            },
+          });
+          if (!grantError && grantData?.user) {
+            activeUser = grantData.user;
+            setUser(grantData.user);
+            userRef.current = grantData.user;
+          }
+        }
+        const p = await fetchProfile(activeUser.id);
         if (isMounted) {
           setProfile(p);
           setIsLoading(false);
           initialChecked.current = true;
 
           // Added Console Logs for Debugging
-          console.log("Current User:", currentSession.user);
+          console.log("Current User:", activeUser);
           console.log("Profile Data:", p);
           console.log("Session:", currentSession);
         }
@@ -284,11 +317,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updated_at: new Date().toISOString(),
       } as UserProfile;
 
-      setUser(mockUser);
+      const userWithTrials = withSyncedTrialMetadata(mockUser);
+      setUser(userWithTrials);
       setProfile(mockProfile);
       localStorage.setItem(
         "mock_session",
-        JSON.stringify({ user: mockUser, profile: mockProfile }),
+        JSON.stringify({ user: userWithTrials, profile: mockProfile }),
       );
       toast.success("Successfully logged in (Demo Mode)");
       return true;
@@ -339,15 +373,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updated_at: new Date().toISOString(),
       };
 
-      setUser(mockUser);
+      const userWithTrials = withSyncedTrialMetadata(mockUser);
+      setUser(userWithTrials);
       setProfile(mockProfile);
       localStorage.setItem(
         "mock_session",
-        JSON.stringify({ user: mockUser, profile: mockProfile }),
+        JSON.stringify({ user: userWithTrials, profile: mockProfile }),
       );
       toast.success("Account created successfully (Demo Mode)");
       
-      console.log("Current User (Mock SignUp):", mockUser);
+      console.log("Current User (Mock SignUp):", userWithTrials);
       console.log("Profile Data (Mock SignUp):", mockProfile);
       return true;
     }
@@ -558,44 +593,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const incrementTrialsUsed = async (): Promise<boolean> => {
+    if (!user?.id) return false;
+
+    const used = readTrialsUsed(user.id, user.user_metadata?.trials_used);
+    persistTrialsUsed(user.id, used);
+
     if (isMockMode) {
-      const currentTrials = Number(localStorage.getItem(`mock_trials_${user?.id}`) || "0");
-      const nextTrials = currentTrials + 1;
-      localStorage.setItem(`mock_trials_${user?.id}`, String(nextTrials));
-      
-      if (user) {
-        const updatedUser = {
-          ...user,
-          user_metadata: {
-            ...user.user_metadata,
-            trials_used: nextTrials
-          }
-        };
-        setUser(updatedUser);
-        
-        const savedMockSession = localStorage.getItem("mock_session");
-        if (savedMockSession) {
-          try {
-            const parsed = JSON.parse(savedMockSession);
-            parsed.user = updatedUser;
-            localStorage.setItem("mock_session", JSON.stringify(parsed));
-          } catch {
-            // ignore
-          }
+      const updatedUser = {
+        ...user,
+        user_metadata: {
+          ...user.user_metadata,
+          trials_used: used,
+          [TRIALS_GRANT_METADATA_KEY]: RESUME_TRIALS_GRANT_VERSION,
+        },
+      };
+      setUser(updatedUser);
+
+      const savedMockSession = localStorage.getItem("mock_session");
+      if (savedMockSession) {
+        try {
+          const parsed = JSON.parse(savedMockSession);
+          parsed.user = updatedUser;
+          localStorage.setItem("mock_session", JSON.stringify(parsed));
+        } catch {
+          // ignore
         }
       }
       return true;
     }
 
-    if (!user) return false;
-
     try {
-      const currentTrials = user.user_metadata?.trials_used || 0;
-      const nextTrials = currentTrials + 1;
-
       const { data, error } = await supabase.auth.updateUser({
         data: {
-          trials_used: nextTrials,
+          trials_used: used,
+          [TRIALS_GRANT_METADATA_KEY]: RESUME_TRIALS_GRANT_VERSION,
         },
       });
 
@@ -612,16 +643,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await supabase
           .from("user_profiles")
           .update({
-            trials_used: nextTrials,
+            trials_used: used,
           } as any)
           .eq("id", user.id);
-      } catch (profileErr) {
+      } catch {
         // ignore if database column does not exist
       }
 
       return true;
     } catch (err) {
-      console.error("Exception incrementing trials:", err);
+      console.error("Exception syncing trials:", err);
       return false;
     }
   };

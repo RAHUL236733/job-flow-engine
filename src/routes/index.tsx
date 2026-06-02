@@ -161,8 +161,8 @@ function LandingPage() {
       {/* Main Landing Page Container with optional blur when Modal is open */}
       <div className={`min-h-screen bg-gradient-hero flex flex-col justify-between transition-all duration-300 ${showAuthModal ? "blur-sm pointer-events-none select-none scale-[0.99]" : ""}`}>
         {/* Navigation Header */}
-        <header className="border-b border-border/40 bg-card/40 backdrop-blur-md sticky top-0 z-50">
-          <div className="mx-auto max-w-6xl px-6 h-16 flex items-center justify-between">
+        <header className="border-b border-border/40 bg-card/40 backdrop-blur-md sticky top-0 z-50 pt-safe">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6 min-h-14 sm:h-16 flex items-center justify-between gap-2">
             <div
               className="flex items-center gap-2 group cursor-pointer"
               onClick={() => navigate({ to: "/" })}
@@ -170,23 +170,23 @@ function LandingPage() {
               <div className="rounded-lg bg-primary p-1.5 text-primary-foreground transition-transform group-hover:scale-105">
                 <Briefcase className="h-5 w-5" />
               </div>
-              <span className="text-base font-bold tracking-tight text-foreground">
+              <span className="text-sm sm:text-base font-bold tracking-tight text-foreground truncate">
                 AI Job<span className="text-primary font-extrabold">Matcher</span>
               </span>
             </div>
 
-            <nav className="flex items-center gap-4">
+            <nav className="flex items-center gap-1.5 sm:gap-4 shrink-0">
               {user ? (
                 <>
                   <Link to="/dashboard">
-                    <Button variant="ghost" className="text-sm font-semibold">
+                    <Button variant="ghost" className="text-xs sm:text-sm font-semibold h-9 sm:h-10 px-2 sm:px-4">
                       Dashboard
                     </Button>
                   </Link>
                   <Button
                     variant="outline"
                     onClick={() => signOut()}
-                    className="text-sm font-semibold text-destructive border-destructive/20 hover:bg-destructive/10"
+                    className="text-xs sm:text-sm font-semibold text-destructive border-destructive/20 hover:bg-destructive/10 h-9 sm:h-10 px-2 sm:px-4"
                   >
                     Sign Out
                   </Button>
@@ -195,7 +195,7 @@ function LandingPage() {
                 <>
                   <Button
                     variant="ghost"
-                    className="text-sm font-semibold"
+                    className="text-xs sm:text-sm font-semibold h-9 sm:h-10 px-2 sm:px-4"
                     onClick={() => {
                       setAuthModalTab("signin");
                       setShowAuthModal(true);
@@ -204,7 +204,7 @@ function LandingPage() {
                     Sign In
                   </Button>
                   <Button
-                    className="text-sm font-semibold rounded-xl px-4 py-2"
+                    className="text-xs sm:text-sm font-semibold rounded-xl px-3 sm:px-4 py-2 h-9 sm:h-10"
                     onClick={() => {
                       setAuthModalTab("signup");
                       setShowAuthModal(true);
@@ -219,13 +219,13 @@ function LandingPage() {
         </header>
 
         {/* Hero Section */}
-        <section className="mx-auto max-w-5xl px-6 pt-16 pb-20 text-center space-y-8 flex-1 flex flex-col justify-center items-center">
+        <section className="mx-auto max-w-5xl px-4 sm:px-6 pt-10 sm:pt-16 pb-16 sm:pb-20 text-center space-y-6 sm:space-y-8 flex-1 flex flex-col justify-center items-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-semibold text-primary backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 text-primary animate-pulse" />
             The future of student job discovery is here
           </div>
 
-          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-foreground leading-[1.1] max-w-4xl">
+          <h1 className="text-3xl sm:text-5xl md:text-6xl font-extrabold tracking-tight text-foreground leading-[1.15] max-w-4xl px-2">
             Supercharge Your Student Job Search with{" "}
             <span className="text-primary bg-clip-text bg-gradient-to-r from-primary to-primary/80">
               AI Matcher
@@ -441,8 +441,8 @@ function LandingPage() {
 
       {/* Blurred overlay and crisp centered auth modal */}
       {showAuthModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[4px] p-4 transition-all duration-300 animate-in fade-in duration-200">
-          <div className="w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl p-6 md:p-8 relative animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-[4px] p-0 sm:p-4 transition-all duration-300 animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-card border border-border rounded-t-2xl sm:rounded-2xl shadow-2xl p-5 sm:p-6 md:p-8 max-h-[92dvh] overflow-y-auto relative animate-in fade-in zoom-in-95 duration-200 pb-safe">
             {/* Close Button */}
             <button
               onClick={() => setShowAuthModal(false)}

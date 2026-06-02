@@ -28,6 +28,11 @@ import {
   saveJobToStore,
   updateApplicationStatus,
 } from "@/lib/job-tracker";
+import {
+  consumeResumeTrial,
+  RESUME_TRIALS_MAX,
+  trialsRemaining,
+} from "@/lib/resume-trials";
 import { COACH_TOOLS, getCoachToolByTab } from "@/lib/career-tools-config";
 import { CoachToolPageView } from "@/components/coach/CoachToolPageView";
 import {
@@ -426,10 +431,6 @@ function DashboardLayout() {
       return;
     }
 
-    // Clear previous user's in-memory tracker data immediately on user switch.
-    setSavedJobsList([]);
-    setApplications([]);
-
     let cancelled = false;
     (async () => {
       try {
@@ -500,33 +501,23 @@ function DashboardLayout() {
   });
 
   const [stagedFile, setStagedFile] = useState<File | null>(null);
-  const [matchesRemaining, setMatchesRemaining] = useState<number>(2);
+  const [matchesRemaining, setMatchesRemaining] = useState<number>(RESUME_TRIALS_MAX);
   const [isDragging, setIsDragging] = useState<boolean>(false);
-  const MAX_RESUME_TRIALS = 2;
+  const trialsExhausted = matchesRemaining <= 0;
 
   useEffect(() => {
     if (!user?.id) {
-      setMatchesRemaining(MAX_RESUME_TRIALS);
+      setMatchesRemaining(RESUME_TRIALS_MAX);
       return;
     }
-    const usedKey = `resume_trials_used_${user.id}`;
-    const localUsedRaw = localStorage.getItem(usedKey);
-    const localUsed = localUsedRaw ? Number(localUsedRaw) : 0;
-    const remoteUsed = Number(user.user_metadata?.trials_used || 0);
-    const used = Math.max(
-      Number.isFinite(localUsed) ? localUsed : 0,
-      Number.isFinite(remoteUsed) ? remoteUsed : 0,
-    );
-    const remaining = Math.max(0, MAX_RESUME_TRIALS - used);
-    setMatchesRemaining(remaining);
-    localStorage.setItem(usedKey, String(used));
+    setMatchesRemaining(trialsRemaining(user.id, user.user_metadata?.trials_used));
   }, [user?.id, user?.user_metadata?.trials_used]);
 
-  useEffect(() => {
-    if (!user?.id) return;
-    const used = Math.max(0, MAX_RESUME_TRIALS - matchesRemaining);
-    localStorage.setItem(`resume_trials_used_${user.id}`, String(used));
-  }, [user?.id, matchesRemaining]);
+  const blockTrialUpload = () => {
+    toast.error("Free trial limit reached", {
+      description: `You have used all ${RESUME_TRIALS_MAX} resume analyses for this account.`,
+    });
+  };
 
   const displayName =
     profileForm.fullName ||
@@ -552,6 +543,11 @@ function DashboardLayout() {
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (trialsExhausted) {
+      blockTrialUpload();
+      e.target.value = "";
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -599,6 +595,11 @@ function DashboardLayout() {
     e.preventDefault();
     setIsDragging(false);
 
+    if (trialsExhausted) {
+      blockTrialUpload();
+      return;
+    }
+
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
 
@@ -631,10 +632,8 @@ function DashboardLayout() {
 
   const startAnalysis = async (file: File) => {
     if (!file) return;
-    if (matchesRemaining <= 0) {
-      toast.error("Free trial limit reached", {
-        description: "You have used all 2 resume analyses.",
-      });
+    if (trialsExhausted) {
+      blockTrialUpload();
       return;
     }
 
@@ -793,15 +792,13 @@ function DashboardLayout() {
         isFallback: false,
       });
       // Strictly consume one credit only after successful analysis output.
-      setMatchesRemaining((prev) => Math.max(0, prev - 1));
       if (user?.id) {
-        const usedKey = `resume_trials_used_${user.id}`;
-        const currentUsedRaw = localStorage.getItem(usedKey);
-        const currentUsed = currentUsedRaw ? Number(currentUsedRaw) : 0;
-        const nextUsed = Math.min(MAX_RESUME_TRIALS, (Number.isFinite(currentUsed) ? currentUsed : 0) + 1);
-        localStorage.setItem(usedKey, String(nextUsed));
+        const remaining = consumeResumeTrial(user.id, user.user_metadata?.trials_used);
+        setMatchesRemaining(remaining);
+        await incrementTrialsUsed();
+      } else {
+        setMatchesRemaining((prev) => Math.max(0, prev - 1));
       }
-      await incrementTrialsUsed();
 
       console.log("n8n analysis applied:", {
         jobs: parsed.jobs.length,
@@ -1070,7 +1067,7 @@ function DashboardLayout() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#07050f] text-[#f8fafc] flex overflow-hidden dot-mesh-bg bg-noise-overlay transition-colors duration-500 font-sans relative pb-16 md:pb-0">
+    <div className="min-h-[100dvh] bg-[#07050f] text-[#f8fafc] flex flex-col md:flex-row overflow-hidden dot-mesh-bg bg-noise-overlay transition-colors duration-500 font-sans relative pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))] md:pb-0">
       <input
         type="file"
         ref={fileInputRef}
@@ -1154,41 +1151,23 @@ function DashboardLayout() {
       </aside>
 
       {/* Main Workspace Frame */}
-      <main className="flex-1 flex flex-col min-h-screen relative overflow-y-auto custom-scrollbar z-20">
-        {/* Global sticky header with Theme switcher */}
-        <header className="flex items-center justify-between border-b border-white/[0.08] bg-slate-950/30 backdrop-blur-md px-6 md:px-8 h-16 sticky top-0 z-40 shrink-0">
-          <div className="flex items-center gap-2 select-none">
-            <h2 className="text-sm font-extrabold text-slate-100 uppercase tracking-widest">
-              {activeTab === "saved"
-                ? "Saved Jobs Vault"
-                : activeTab === "matcher"
-                  ? "AI Job Matcher Feed"
-                  : activeTab === "applications"
-                    ? "Tracked Applications"
-                    : activeTab}
-            </h2>
-          </div>
-
-          <div className="flex items-center gap-3">
-          </div>
-        </header>
-
+      <main className="flex-1 flex flex-col min-h-0 md:min-h-screen relative overflow-y-auto overflow-x-hidden custom-scrollbar z-20 w-full">
         {/* Dynamic Tab Switchboard */}
         <div
-          className={`flex-1 p-6 md:p-8 space-y-8 transition-all duration-700 ease-out transform ${isMounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-[10px]"
+          className={`flex-1 p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8 transition-all duration-700 ease-out transform max-w-[100vw] ${isMounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-[10px]"
             }`}
         >
           {/* TAB 1: DASHBOARD VIEW */}
           {activeTab === "dashboard" && (
             <div className="space-y-8 animate-in fade-in duration-300">
               {/* Welcome hero — checklist removed; use Career Tools pages */}
-              <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-[#15122e] via-[#0f0d20] to-[#07050f] p-6 md:p-10 border border-[#8b5cf6]/25 shadow-[0_20px_45px_rgba(139,92,246,0.15)] select-none">
+              <div className="relative rounded-2xl sm:rounded-3xl overflow-hidden bg-gradient-to-br from-[#15122e] via-[#0f0d20] to-[#07050f] p-5 sm:p-6 md:p-10 border border-[#8b5cf6]/25 shadow-[0_20px_45px_rgba(139,92,246,0.15)] select-none">
                 <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-45">
                   <span className="absolute w-2 h-2 bg-[#8b5cf6] rounded-full animate-float" style={{ left: "8%", top: "25%" }} />
                   <span className="absolute w-3.5 h-3.5 bg-[#f59e0b] rounded-full animate-float" style={{ left: "28%", top: "72%", animationDelay: "1.2s" }} />
                 </div>
                 <div className="relative z-10 space-y-4 max-w-2xl">
-                  <h1 className="text-2.5xl md:text-4xl font-extrabold text-[#f8fafc] leading-tight">
+                  <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-[#f8fafc] leading-tight break-words">
                     Welcome Back, {displayName}! 👋
                   </h1>
                   <div className="h-8 flex items-center">
@@ -1203,16 +1182,16 @@ function DashboardLayout() {
                   <p className="text-sm text-slate-400 font-medium max-w-lg">
                     Open any Career Tool below for ATS, resume review, salary insights, and more — all powered by your Supabase-stored analysis.
                   </p>
-                  <div className="flex flex-wrap gap-3 pt-2">
+                  <div className="flex flex-col sm:flex-row flex-wrap gap-3 pt-2 w-full">
                     <button
                       onClick={() => setActiveTab("matcher")}
-                      className="h-12 px-6 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-sm hover-shimmer shadow-lg active:scale-95 transition-all"
+                      className="w-full sm:w-auto h-12 px-6 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-sm hover-shimmer shadow-lg active:scale-95 transition-all"
                     >
                       Start Job Matching →
                     </button>
                     <button
                       onClick={() => setActiveTab("tool-ats")}
-                      className="h-12 px-6 rounded-xl border border-[#8b5cf6]/30 text-[#f8fafc] font-bold text-sm hover:bg-[#8b5cf6]/10 active:scale-95 transition-all"
+                      className="w-full sm:w-auto h-12 px-6 rounded-xl border border-[#8b5cf6]/30 text-[#f8fafc] font-bold text-sm hover:bg-[#8b5cf6]/10 active:scale-95 transition-all"
                     >
                       ATS Score Check
                     </button>
@@ -1220,8 +1199,8 @@ function DashboardLayout() {
                 </div>
               </div>
 
-              {/* Stats Cards grid: snap scroll row on mobile */}
-              <div className="flex overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid md:grid-cols-2 lg:grid-cols-4 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
+              {/* Stats Cards: 2×2 grid (no horizontal scroll) */}
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 select-none">
                 {[
                   { title: "Jobs Matched", value: jobsMatchedCount, icon: Briefcase, color: "text-[#8b5cf6]", iconBorder: "border-[#8b5cf6]/30", glow: "hover:shadow-[0_8px_20px_rgba(139,92,246,0.15)]" },
                   { title: "Applications Sent", value: appsSentCount, icon: FileText, color: "text-[#6366f1]", iconBorder: "border-[#6366f1]/30", glow: "hover:shadow-[0_8px_20px_rgba(99,102,241,0.15)]" },
@@ -1230,37 +1209,37 @@ function DashboardLayout() {
                 ].map((stat, i) => (
                   <div
                     key={i}
-                    className={`glass-card rounded-2xl p-5 border border-white/5 ${stat.glow} hover:-translate-y-1.5 transition-all duration-300 flex items-center justify-between group shrink-0 w-[85%] snap-center md:w-auto md:shrink`}
+                    className={`glass-card rounded-2xl p-4 sm:p-5 border border-white/5 ${stat.glow} hover:-translate-y-1.5 transition-all duration-300 flex items-center justify-between gap-2 group w-full min-w-0`}
                   >
-                    <div className="space-y-1">
-                      <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest select-none">
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <p className="text-[9px] sm:text-[10px] font-extrabold text-slate-400 uppercase tracking-widest select-none truncate">
                         {stat.title}
                       </p>
                       {!stat.isProfile ? (
-                        <h3 className="text-3xl font-black text-[#f8fafc] leading-none">
+                        <h3 className="text-2xl sm:text-3xl font-black text-[#f8fafc] leading-none">
                           <AnimatedCounter value={stat.value} />
                         </h3>
                       ) : (
-                        <p className="text-[10px] text-[#10b981] font-semibold select-none flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" />
+                        <p className="text-[9px] sm:text-[10px] text-[#10b981] font-semibold select-none flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse shrink-0" />
                           Live Rating
                         </p>
                       )}
                     </div>
 
-                    <div className="flex items-center justify-center">
+                    <div className="flex items-center justify-center shrink-0">
                       {stat.isProfile ? (
                         <CircularProgress
                           value={stat.value}
-                          size={80}
-                          strokeWidth={8}
+                          size={64}
+                          strokeWidth={7}
                           primaryColor="#8b5cf6"
                           secondaryColor="rgba(255, 255, 255, 0.05)"
-                          fontSize="1.1rem"
+                          fontSize="0.95rem"
                         />
                       ) : (
-                        <div className={`p-3 rounded-xl bg-slate-900 border ${stat.iconBorder} group-hover:scale-110 transition-transform duration-300 ${stat.color}`}>
-                          <stat.icon className="h-6 w-6" />
+                        <div className={`p-2.5 sm:p-3 rounded-xl bg-slate-900 border ${stat.iconBorder} group-hover:scale-110 transition-transform duration-300 ${stat.color}`}>
+                          <stat.icon className="h-5 w-5 sm:h-6 sm:w-6" />
                         </div>
                       )}
                     </div>
@@ -1278,8 +1257,8 @@ function DashboardLayout() {
                   <div className="absolute bottom-0 left-0 w-32 h-[3.5px] bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] rounded-full shadow-[0_0_8px_#8b5cf6]" />
                 </div>
 
-                {/* 2x2 scroll on mobile, 3x3 on desktop */}
-                <div className="grid grid-rows-2 grid-flow-col overflow-x-auto snap-x snap-mandatory gap-6 pb-4 md:grid-rows-none md:grid-flow-row md:grid-cols-3 md:overflow-x-visible md:pb-0 scrollbar-none select-none">
+                {/* 2×2 grid rows — all 9 cards, no horizontal scroll */}
+                <div className="grid grid-cols-2 gap-3 sm:gap-4 md:gap-5 select-none">
                   {COACH_TOOLS.map((card) => (
                     <QuickActionCard
                       key={card.id}
@@ -1301,13 +1280,13 @@ function DashboardLayout() {
               {pipelineStatus.step === "idle" ? (
                 <div className="space-y-6">
                   <div className="space-y-1.5 select-none">
-                    <h3 className="text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Resume Matcher</h3>
+                    <h3 className="text-xl sm:text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Resume Matcher</h3>
                     <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
                       Upload your resume to extract skills, calculate an ATS match score, and scrape live entry-level jobs tailored to your skillset.
                     </p>
                   </div>
 
-                  <div className="max-w-3xl mx-auto w-full glass-card rounded-3xl p-6 border border-white/5 shadow-[0_20px_50px_rgba(139,92,246,0.12)] bg-[#0f0d20]/80 backdrop-blur-xl space-y-6 relative overflow-hidden">
+                  <div className="max-w-3xl mx-auto w-full glass-card rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-white/5 shadow-[0_20px_50px_rgba(139,92,246,0.12)] bg-[#0f0d20]/80 backdrop-blur-xl space-y-5 sm:space-y-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-32 h-32 bg-[#3b82f6]/5 rounded-full blur-3xl pointer-events-none" />
 
                     {/* Free Trial Banner */}
@@ -1318,23 +1297,35 @@ function DashboardLayout() {
                         </div>
                         <div className="space-y-0.5">
                           <span className="text-xs font-black text-slate-200">Free Trial Usage</span>
-                          <p className="text-[10px] text-slate-400 font-medium">You get 2 free resume matches per account.</p>
+                          <p className="text-[10px] text-slate-400 font-medium">
+                            {trialsExhausted
+                              ? "No free analyses left on this account."
+                              : `You have ${RESUME_TRIALS_MAX} free resume matches per account.`}
+                          </p>
                         </div>
                       </div>
                       <span className="text-xs font-black text-slate-300 whitespace-nowrap shrink-0">
-                        <span className="text-[#3b82f6] text-sm font-bold">{matchesRemaining}</span> / 2 remaining
+                        <span className="text-[#3b82f6] text-sm font-bold">{matchesRemaining}</span> / {RESUME_TRIALS_MAX} remaining
                       </span>
                     </div>
 
                     {/* Drag and Drop Box */}
                     <div
-                      onDragOver={handleDragOver}
-                      onDragLeave={handleDragLeave}
-                      onDrop={handleDrop}
-                      onClick={() => fileInputRef.current?.click()}
-                      className={`border-2 border-dashed rounded-2xl py-16 px-10 flex flex-col items-center justify-center gap-5 transition-all duration-300 cursor-pointer select-none group relative overflow-hidden ${isDragging
-                          ? "border-[#3b82f6] bg-[#3b82f6]/10 scale-[1.01] shadow-[0_0_20px_rgba(59,130,246,0.15)]"
-                          : "border-white/10 bg-slate-950/20 hover:border-[#8b5cf6]/30 hover:bg-white/[0.01]"
+                      onDragOver={trialsExhausted ? undefined : handleDragOver}
+                      onDragLeave={trialsExhausted ? undefined : handleDragLeave}
+                      onDrop={trialsExhausted ? undefined : handleDrop}
+                      onClick={() => {
+                        if (trialsExhausted) {
+                          blockTrialUpload();
+                          return;
+                        }
+                        fileInputRef.current?.click();
+                      }}
+                      className={`border-2 border-dashed rounded-2xl py-10 sm:py-16 px-4 sm:px-10 flex flex-col items-center justify-center gap-4 sm:gap-5 transition-all duration-300 select-none group relative overflow-hidden ${trialsExhausted
+                          ? "border-white/5 bg-slate-950/10 opacity-60 cursor-not-allowed"
+                          : isDragging
+                            ? "border-[#3b82f6] bg-[#3b82f6]/10 scale-[1.01] shadow-[0_0_20px_rgba(59,130,246,0.15)] cursor-pointer"
+                            : "border-white/10 bg-slate-950/20 hover:border-[#8b5cf6]/30 hover:bg-white/[0.01] cursor-pointer"
                         }`}
                     >
                       <div className="w-18 h-18 rounded-full bg-[#3b82f6]/10 border border-[#3b82f6]/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
@@ -1382,17 +1373,15 @@ function DashboardLayout() {
                     {/* Analyze Action Button */}
                     <button
                       onClick={() => startAnalysis(stagedFile!)}
-                      disabled={!stagedFile || matchesRemaining <= 0}
-                      className={`w-full h-12 rounded-xl text-white font-bold text-xs hover-shimmer shadow-lg flex items-center justify-center gap-2 transition-all duration-300 ${stagedFile
-                          ? matchesRemaining > 0
-                            ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
-                            : "bg-white/5 border border-white/5 text-slate-500 cursor-not-allowed"
+                      disabled={!stagedFile || trialsExhausted}
+                      className={`w-full h-12 rounded-xl text-white font-bold text-xs hover-shimmer shadow-lg flex items-center justify-center gap-2 transition-all duration-300 ${stagedFile && !trialsExhausted
+                          ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
                           : "bg-white/5 border border-white/5 text-slate-500 cursor-not-allowed"
                         }`}
                       style={{ minHeight: "48px" }}
                     >
                       <Sparkles className="w-4 h-4" />
-                      {matchesRemaining > 0 ? "Analyze & Find Matches" : "Free Trial Limit Reached"}
+                      {!trialsExhausted ? "Analyze & Find Matches" : "Free Trial Limit Reached"}
                     </button>
                   </div>
                 </div>
@@ -1436,7 +1425,7 @@ function DashboardLayout() {
                   </div>
 
                   {/* Steps Grid */}
-                  <div className="grid gap-4 md:grid-cols-4 select-none">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 select-none">
                     <PipelineStepCard
                       stepNum={1}
                       title="Analyzing Resume"
@@ -1599,19 +1588,19 @@ function DashboardLayout() {
                           key={job.id}
                           className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300 flex flex-col justify-between space-y-4"
                         >
-                          <div className="flex items-start justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className="w-11 h-11 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-lg font-black text-[#8b5cf6] select-none">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="w-11 h-11 shrink-0 bg-white/5 border border-white/10 rounded-xl flex items-center justify-center text-lg font-black text-[#8b5cf6] select-none">
                                 {job.company.charAt(0)}
                               </div>
-                              <div>
-                                <h4 className="font-extrabold text-white text-sm tracking-tight">{job.title}</h4>
-                                <p className="text-[11px] font-bold text-slate-400 select-none">{job.company}</p>
+                              <div className="min-w-0">
+                                <h4 className="font-extrabold text-white text-sm tracking-tight line-clamp-2">{job.title}</h4>
+                                <p className="text-[11px] font-bold text-slate-400 select-none truncate">{job.company}</p>
                               </div>
                             </div>
 
                             <span
-                              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold shadow-sm flex items-center gap-1 select-none border bg-[#8b5cf6]/10 text-[#3b82f6] border-[#8b5cf6]/20`}
+                              className={`self-start sm:self-auto px-2.5 py-1 rounded-full text-[10px] font-extrabold shadow-sm flex items-center gap-1 select-none border bg-[#8b5cf6]/10 text-[#3b82f6] border-[#8b5cf6]/20 shrink-0`}
                             >
                               ⚡ {job.score}% match
                             </span>
@@ -1754,8 +1743,8 @@ function DashboardLayout() {
             <div className="space-y-6 animate-in fade-in duration-300">
               {/* Tracker Banner */}
               {showAppsBanner && (
-                <div className="relative glass-card rounded-2xl p-5 border border-white/5 border-l-4 border-l-[#8b5cf6] overflow-hidden flex justify-between items-start animate-in fade-in duration-300">
-                  <div className="space-y-2 select-none">
+                <div className="relative glass-card rounded-2xl p-4 sm:p-5 border border-white/5 border-l-4 border-l-[#8b5cf6] overflow-hidden flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 animate-in fade-in duration-300">
+                  <div className="space-y-2 select-none min-w-0 flex-1">
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
                       📋 What is the Applications Tracker?
                     </h3>
@@ -1775,8 +1764,9 @@ function DashboardLayout() {
                     </div>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setShowAppsBanner(false)}
-                    className="text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5"
+                    className="self-end sm:self-start text-slate-400 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/5 shrink-0"
                   >
                     <X className="h-4.5 w-4.5" />
                   </button>
@@ -1784,7 +1774,7 @@ function DashboardLayout() {
               )}
 
               {/* Status Counter Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
                 {[
                   { id: "Applied", label: "Applied", color: "text-[#8b5cf6]", borderColor: "border-b-[#8b5cf6]" },
                   { id: "Under Review", label: "Under Review", color: "text-[#6366f1]", borderColor: "border-b-[#6366f1]" },
@@ -1810,11 +1800,11 @@ function DashboardLayout() {
               </div>
 
               {/* Track CTA */}
-              <div className="flex items-center justify-between pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
                 <h4 className="text-sm font-bold text-slate-300 select-none">Active Trackers</h4>
                 <button
                   onClick={() => setShowTrackModal(true)}
-                  className="h-12 px-4 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-xs shadow-md hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                  className="w-full sm:w-auto h-12 px-4 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-white font-bold text-xs shadow-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Track New Job
@@ -2290,23 +2280,35 @@ function DashboardLayout() {
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION BAR - collapses to 5 icons */}
-      <nav className="flex md:hidden fixed bottom-0 left-0 right-0 h-16 bg-[#07050f]/95 backdrop-blur-md border-t border-white/[0.08] justify-around items-center z-50 pb-safe shadow-lg select-none">
+      <nav className="flex md:hidden fixed bottom-0 left-0 right-0 min-h-[4rem] h-[calc(4rem+env(safe-area-inset-bottom,0px))] bg-[#07050f]/98 backdrop-blur-xl border-t border-white/[0.08] justify-around items-stretch z-50 pb-safe shadow-[0_-8px_30px_rgba(0,0,0,0.45)] select-none">
         {navItems.slice(0, 5).map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
+          const shortLabel =
+            item.id === "applications"
+              ? "Apps"
+              : item.id === "dashboard"
+                ? "Home"
+                : item.id === "matcher"
+                  ? "Match"
+                  : item.id === "saved"
+                    ? "Saved"
+                    : item.label;
           return (
             <button
               key={item.id}
+              type="button"
               onClick={() => setActiveTab(item.id)}
-              className="flex flex-col items-center justify-center flex-1 h-full relative group cursor-pointer"
+              className="flex flex-col items-center justify-center flex-1 min-w-0 px-0.5 py-2 relative group cursor-pointer active:scale-95 transition-transform"
               style={{ minHeight: "48px" }}
             >
-              <Icon className={`h-5.5 w-5.5 transition-all duration-300 ${isActive ? 'text-[#8b5cf6] scale-110' : 'text-slate-400'}`} />
-              <span className={`text-[9px] font-bold mt-1 transition-colors ${isActive ? 'text-[#8b5cf6]' : 'text-slate-500'}`}>
-                {item.label}
+              <Icon className={`h-5 w-5 transition-all duration-300 ${isActive ? "text-[#8b5cf6] scale-110" : "text-slate-400"}`} />
+              <span className={`text-[8px] sm:text-[9px] font-bold mt-0.5 truncate max-w-full px-0.5 transition-colors ${isActive ? "text-[#8b5cf6]" : "text-slate-500"}`}>
+                <span className="sm:hidden">{shortLabel}</span>
+                <span className="hidden sm:inline">{item.label}</span>
               </span>
               {isActive && (
-                <span className="absolute bottom-1 w-1.5 h-1.5 rounded-full bg-[#8b5cf6] shadow-[0_0_8px_#8b5cf6]" />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-[#8b5cf6] shadow-[0_0_8px_#8b5cf6]" />
               )}
             </button>
           );
@@ -2315,8 +2317,8 @@ function DashboardLayout() {
 
       {/* TRACK NEW JOB FORM MODAL */}
       {showTrackModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#0f0d20] border border-white/10 rounded-3xl p-6 max-w-md w-full relative animate-in zoom-in-95 duration-200 space-y-4">
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-[#0f0d20] border border-white/10 rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 max-w-md w-full max-h-[92dvh] sm:max-h-[90vh] overflow-y-auto relative animate-in zoom-in-95 duration-200 space-y-4 pb-safe">
             <button
               onClick={() => setShowTrackModal(false)}
               className="absolute top-4 right-4 text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-white/5"
@@ -2355,7 +2357,7 @@ function DashboardLayout() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="track-status" className="text-xs font-bold text-slate-300">Status Stage</Label>
                   <select
@@ -2434,7 +2436,7 @@ function QuickActionCard({ title, subtitle, emoji, gradientClass, onClick }: Qui
   return (
     <RippleCard
       onClick={onClick}
-      className={`relative min-h-[160px] rounded-2xl p-5 overflow-hidden group transition-all duration-300 bg-gradient-to-br ${gradientClass} border border-white/10 hover:border-white/20 hover:scale-[1.04] hover:shadow-[0_0_25px_rgba(201,168,76,0.3)] flex flex-col justify-between shrink-0 w-[240px] snap-start md:w-auto md:shrink`}
+      className={`relative min-h-[140px] sm:min-h-[160px] w-full rounded-2xl p-4 sm:p-5 overflow-hidden group transition-all duration-300 bg-gradient-to-br ${gradientClass} border border-white/10 hover:border-white/20 md:hover:scale-[1.02] hover:shadow-[0_0_25px_rgba(139,92,246,0.25)] flex flex-col justify-between`}
     >
       <div className="absolute inset-0 bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
 

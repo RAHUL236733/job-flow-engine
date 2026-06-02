@@ -36,8 +36,8 @@ export function CoachToolPageView({
     savedJobsList.some((j) => j.id === normalizeJob(job).id);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300 max-w-5xl mx-auto w-full">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-5 sm:space-y-6 animate-in fade-in duration-300 max-w-5xl mx-auto w-full px-0 sm:px-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <button
           type="button"
           onClick={onBack}
@@ -46,11 +46,11 @@ export function CoachToolPageView({
           <ArrowLeft className="h-4 w-4" />
           Back to Dashboard
         </button>
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => refreshAnalysis()}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-xs font-bold text-slate-300 hover:bg-white/10"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl border border-white/10 bg-white/5 text-xs font-bold text-slate-300 hover:bg-white/10 min-h-[44px]"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             Refresh
@@ -58,7 +58,7 @@ export function CoachToolPageView({
           <button
             type="button"
             onClick={onOpenMatcher}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-xs font-bold text-white"
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] text-xs font-bold text-white min-h-[44px]"
           >
             <Sparkles className="h-3.5 w-3.5" />
             Job Matcher

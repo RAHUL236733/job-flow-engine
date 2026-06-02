@@ -90,6 +90,8 @@ interface AnalysisContextType {
 
 const AnalysisContext = createContext<AnalysisContextType | undefined>(undefined);
 
+const analysisInflight = new Map<string, Promise<AnalysisData | null>>();
+
 export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
@@ -103,20 +105,35 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
     try {
       setIsLoading(true);
-      const { data, error } = await supabase
-        .from("analysis_results")
-        .select("response_json")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(1);
 
-      if (error) {
-        console.error("Error fetching latest analysis results:", error);
-      } else if (data && data.length > 0) {
-        setAnalysis(hydrateAnalysisFromDb(data[0].response_json));
-      } else {
-        setAnalysis(null);
+      let inflight = analysisInflight.get(userId);
+      if (!inflight) {
+        inflight = (async () => {
+          const { data, error } = await supabase
+            .from("analysis_results")
+            .select("response_json")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (error) {
+            console.error("Error fetching latest analysis results:", error);
+            return null;
+          }
+          if (data && data.length > 0) {
+            return hydrateAnalysisFromDb(data[0].response_json);
+          }
+          return null;
+        })().finally(() => {
+          if (analysisInflight.get(userId) === inflight) {
+            analysisInflight.delete(userId);
+          }
+        });
+        analysisInflight.set(userId, inflight);
       }
+
+      const next = await inflight;
+      setAnalysis(next);
     } catch (err) {
       console.error("Failed to load analysis:", err);
     } finally {
@@ -131,7 +148,7 @@ export const AnalysisProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setAnalysis(null);
       setIsLoading(false);
     }
-  }, [user, fetchLatestAnalysis]);
+  }, [user?.id, fetchLatestAnalysis]);
 
   const saveAnalysis = async (data: AnalysisData & { _n8nFlat?: Record<string, unknown> }): Promise<boolean> => {
     if (!user?.id) {
