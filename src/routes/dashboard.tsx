@@ -939,7 +939,7 @@ function DashboardLayout() {
     }
 
     try {
-      const created = await insertApplication(user.id, {
+      const created = await insertApplication(user!.id, {
         company: newAppForm.company,
         role: newAppForm.role,
         status: newAppForm.status,
@@ -975,7 +975,7 @@ function DashboardLayout() {
   const handleDeleteApplication = async (id: string) => {
     if (!ensureTrackerPersistence()) return;
     try {
-      await deleteApplicationFromStore(user.id, id);
+      await deleteApplicationFromStore(user!.id, id);
       setApplications((prev) => prev.filter((app) => app.id !== id));
       toast.info("Application deleted");
     } catch (err) {
@@ -987,7 +987,7 @@ function DashboardLayout() {
   const handleUpdateAppStatus = async (id: string, status: string) => {
     if (!ensureTrackerPersistence()) return;
     try {
-      await updateApplicationStatus(user.id, id, status);
+      await updateApplicationStatus(user!.id, id, status);
       setApplications((prev) =>
         prev.map((app) => (app.id === id ? { ...app, status } : app)),
       );
@@ -1006,13 +1006,13 @@ function DashboardLayout() {
       .then(async () => {
         const existing = savedJobsList.find((j) => j.id === normalized.id);
         if (existing) {
-          await removeSavedJobFromStore(user.id, existing);
+          await removeSavedJobFromStore(user!.id, existing);
           setSavedJobsList((prev) => prev.filter((j) => j.id !== normalized.id));
           toast.info(`Removed ${normalized.title} from Saved Jobs`);
           return;
         }
 
-        const saved = await saveJobToStore(user.id, normalized);
+        const saved = await saveJobToStore(user!.id, normalized);
         if (!saved) {
           toast.error("Could not save job. Try again.");
           return;
@@ -1435,9 +1435,7 @@ function DashboardLayout() {
                           ? "active"
                           : pipelineStatus.step === "failed" && pipelineStatus.progress < 25
                             ? "failed"
-                            : pipelineStatus.step !== "idle"
-                              ? "success"
-                              : "pending"
+                            : "success"
                       }
                     />
                     <PipelineStepCard
@@ -1447,7 +1445,7 @@ function DashboardLayout() {
                       status={
                         pipelineStatus.step === "extracting"
                           ? "active"
-                          : pipelineStatus.step === "analyzing" || pipelineStatus.step === "idle"
+                          : pipelineStatus.step === "analyzing"
                             ? "pending"
                             : "success"
                       }
@@ -1938,7 +1936,7 @@ function DashboardLayout() {
                 onOpenMatcher={() => setActiveTab("matcher")}
                 displayName={displayName}
                 profileEmail={displayEmail}
-                resumeName={profile?.resume_name}
+                resumeName={profile?.resume_name ?? undefined}
                 parsedSkills={skillsList}
                 jobs={jobsList}
                 internships={internshipsList}
