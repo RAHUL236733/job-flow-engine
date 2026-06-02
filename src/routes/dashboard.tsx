@@ -638,7 +638,7 @@ function DashboardLayout() {
     }
 
     // Check environment variables (throw warnings/asserts if missing)
-    const API_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || "https://primary-production-48b6.up.railway.app/webhook/upload-resume";
+    const API_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || "https://n8n-latest-nnow.onrender.com/webhook/upload-resume";
     const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
     const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
