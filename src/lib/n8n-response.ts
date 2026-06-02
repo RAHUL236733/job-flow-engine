@@ -505,12 +505,12 @@ export const N8N_WAIT_PIPELINE_STEPS: {
   {
     step: "analyzing",
     progress: 12,
-    details: "Uploading resume to n8n — waiting for workflow to finish…",
+    details: "Uploading resume — waiting for processing to finish…",
   },
   {
     step: "analyzing",
     progress: 22,
-    details: "n8n is extracting text from your resume…",
+    details: "Extracting text from your resume…",
   },
   {
     step: "extracting",
@@ -540,6 +540,6 @@ export const N8N_WAIT_PIPELINE_STEPS: {
   {
     step: "matching",
     progress: 92,
-    details: "Almost done — waiting for n8n to finish…",
+    details: "Almost done — waiting for processing to finish…",
   },
 ];

@@ -115,7 +115,7 @@ export function ScoreHero({ score, label }: { score: number; label: string }) {
       <div>
         <p className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest">{label}</p>
         <p className="text-lg font-bold text-white mt-1">ATS compatibility score</p>
-        <p className="text-xs text-slate-400 mt-1">From your latest n8n resume analysis</p>
+        <p className="text-xs text-slate-400 mt-1">From your latest resume analysis</p>
       </div>
     </div>
   );

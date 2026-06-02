@@ -73,7 +73,7 @@ export function CoachToolPageView({
         <h1 className="text-2xl md:text-3xl font-black text-white mt-3">{tool.title}</h1>
         <p className="text-sm text-white/80 mt-1 font-medium">{tool.subtitle}</p>
         <p className="text-[10px] text-white/50 mt-3 font-mono uppercase tracking-wider">
-          Live n8n output — field names match your webhook JSON
+          Live processing output — fields match your results
         </p>
       </div>
 
@@ -86,7 +86,7 @@ export function CoachToolPageView({
         ) : !analysis ? (
           <p className="text-sm text-slate-400 text-center py-16">
             No analysis yet. Upload your resume in <strong className="text-white">Job Matcher</strong> and wait
-            until n8n finishes — then open this page again.
+            until processing finishes — then open this page again.
           </p>
         ) : (
           <N8nStructuredToolContent

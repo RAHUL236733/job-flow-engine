@@ -323,11 +323,12 @@ const PipelineStepCard = ({
 };
 
 function DashboardLayout() {
-  const { user, profile, updateProfile, signOut, signIn, isMockMode } = useAuth();
+  const { user, profile, updateProfile, signOut, signIn, isMockMode, isLoading, incrementTrialsUsed } = useAuth();
   const { analysis, saveAnalysis, refreshAnalysis } = useAnalysis();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const saveJobQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Active Tab state: Dashboard, Job Matcher, Saved Jobs, Applications, Profile, Settings
   const [activeTab, setActiveTab] = useState<string>("dashboard");
@@ -340,6 +341,12 @@ function DashboardLayout() {
       setTheme("dark");
     }
   }, []);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      navigate({ to: "/" });
+    }
+  }, [isLoading, user, navigate]);
 
   // Sync profile details if available - Starts empty/zero by default
   const [profileForm, setProfileForm] = useState({
@@ -382,13 +389,46 @@ function DashboardLayout() {
     }
   }, [profile, user]);
 
-  // Load saved jobs & applications from Supabase only (per-user, not localStorage)
+  const getTrackerCacheKey = (userId: string) => `tracker_state_v2_${userId}`;
+
+  const readTrackerCache = (userId: string): { apps: any[] } | null => {
+    try {
+      // Clear old cache format once so stale default/demo saved jobs don't reappear.
+      localStorage.removeItem(`tracker_state_${userId}`);
+      const raw = localStorage.getItem(getTrackerCacheKey(userId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { apps?: any[] };
+      return {
+        apps: Array.isArray(parsed.apps) ? parsed.apps : [],
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const writeTrackerCache = (userId: string, _savedJobs: any[], apps: any[]) => {
+    localStorage.setItem(
+      getTrackerCacheKey(userId),
+      JSON.stringify({
+        apps,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  };
+
+  // Load tracker data from Supabase and fall back to last local cache if needed
   useEffect(() => {
+    if (isLoading) return;
+
     if (!user || isMockMode) {
       setSavedJobsList([]);
       setApplications([]);
       return;
     }
+
+    // Clear previous user's in-memory tracker data immediately on user switch.
+    setSavedJobsList([]);
+    setApplications([]);
 
     let cancelled = false;
     (async () => {
@@ -400,18 +440,32 @@ function DashboardLayout() {
         if (cancelled) return;
         setSavedJobsList(saved);
         setApplications(apps);
-        
-        if (apps.length > 0) {
-        }
+        writeTrackerCache(user.id, saved, apps);
       } catch (err) {
         console.error("Failed to load job tracker data:", err);
+        const cached = readTrackerCache(user.id);
+        if (cached && !cancelled) {
+          // Saved Jobs should come from Supabase only; if load fails, keep default zero.
+          setSavedJobsList([]);
+          setApplications(cached.apps);
+          toast.warning("Loaded tracker from local cache", {
+            description: "Could not sync with Supabase right now. Your latest local tracker data is shown.",
+          });
+          return;
+        }
+
+        if (!cancelled) {
+          // Ensure we never show previous user's tracker data.
+          setSavedJobsList([]);
+          setApplications([]);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [user?.id, isMockMode]);
+  }, [user?.id, isMockMode, isLoading]);
 
   // Hydrate matcher lists + skills whenever latest n8n analysis loads from Supabase
   useEffect(() => {
@@ -429,13 +483,10 @@ function DashboardLayout() {
   const [applications, setApplications] = useState<any[]>([]);
 
   // Job Matcher Sub-system states
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedRoleType, setSelectedRoleType] = useState("All");
   const [isScraping, setIsScraping] = useState(false);
   const [jobsList, setJobsList] = useState<any[]>([]);
   const [internshipsList, setInternshipsList] = useState<any[]>([]);
   const [matcherView, setMatcherView] = useState<"jobs" | "internships">("jobs");
-  const [n8nResponse, setN8nResponse] = useState<any>(null);
 
   const [pipelineStatus, setPipelineStatus] = useState<{
     step: "idle" | "analyzing" | "extracting" | "scoring" | "matching" | "complete" | "failed";
@@ -449,8 +500,33 @@ function DashboardLayout() {
   });
 
   const [stagedFile, setStagedFile] = useState<File | null>(null);
-  const [matchesRemaining, setMatchesRemaining] = useState<number>(3);
+  const [matchesRemaining, setMatchesRemaining] = useState<number>(2);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const MAX_RESUME_TRIALS = 2;
+
+  useEffect(() => {
+    if (!user?.id) {
+      setMatchesRemaining(MAX_RESUME_TRIALS);
+      return;
+    }
+    const usedKey = `resume_trials_used_${user.id}`;
+    const localUsedRaw = localStorage.getItem(usedKey);
+    const localUsed = localUsedRaw ? Number(localUsedRaw) : 0;
+    const remoteUsed = Number(user.user_metadata?.trials_used || 0);
+    const used = Math.max(
+      Number.isFinite(localUsed) ? localUsed : 0,
+      Number.isFinite(remoteUsed) ? remoteUsed : 0,
+    );
+    const remaining = Math.max(0, MAX_RESUME_TRIALS - used);
+    setMatchesRemaining(remaining);
+    localStorage.setItem(usedKey, String(used));
+  }, [user?.id, user?.user_metadata?.trials_used]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const used = Math.max(0, MAX_RESUME_TRIALS - matchesRemaining);
+    localStorage.setItem(`resume_trials_used_${user.id}`, String(used));
+  }, [user?.id, matchesRemaining]);
 
   const displayName =
     profileForm.fullName ||
@@ -555,6 +631,12 @@ function DashboardLayout() {
 
   const startAnalysis = async (file: File) => {
     if (!file) return;
+    if (matchesRemaining <= 0) {
+      toast.error("Free trial limit reached", {
+        description: "You have used all 2 resume analyses.",
+      });
+      return;
+    }
 
     // Check environment variables (throw warnings/asserts if missing)
     const API_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || "https://primary-production-48b6.up.railway.app/webhook/upload-resume";
@@ -562,26 +644,26 @@ function DashboardLayout() {
     const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
     if (!API_URL) {
-      const msg = "Environment variable VITE_N8N_WEBHOOK_URL is missing!";
-      toast.error(msg);
+      toast.error("Service unavailable", {
+        description: "Try again later.",
+      });
       console.error("[UPLOAD DEBUG] missing env variable: VITE_N8N_WEBHOOK_URL");
       return;
     }
     if (!SUPABASE_URL) {
-      const msg = "Environment variable VITE_SUPABASE_URL is missing!";
-      toast.error(msg);
+      toast.error("Service unavailable", {
+        description: "Try again later.",
+      });
       console.error("[UPLOAD DEBUG] missing env variable: VITE_SUPABASE_URL");
       return;
     }
     if (!SUPABASE_ANON_KEY) {
-      const msg = "Environment variable VITE_SUPABASE_ANON_KEY is missing!";
-      toast.error(msg);
+      toast.error("Service unavailable", {
+        description: "Try again later.",
+      });
       console.error("[UPLOAD DEBUG] missing env variable: VITE_SUPABASE_ANON_KEY");
       return;
     }
-
-    // Decrement free trial usage
-    setMatchesRemaining((prev) => Math.max(0, prev - 1));
 
     // Clear staged file so we transition smoothly to stepper status
     setStagedFile(null);
@@ -597,7 +679,7 @@ function DashboardLayout() {
     const formData = new FormData();
     formData.append("resume", file);
 
-    const uploadToastId = toast.loading("Waiting for n8n…", {
+    const uploadToastId = toast.loading("Waiting for service…", {
       description: "Stay on this page until the workflow returns your analysis.",
       duration: Infinity,
     });
@@ -676,7 +758,7 @@ function DashboardLayout() {
         throw new Error(SERVICE_UNAVAILABLE_MESSAGE);
       }
 
-      setN8nResponse(responseData);
+      // Keep response parsing internal; do not show raw webhook details to users.
 
       if (parsed.jobs.length) setJobsList(parsed.jobs);
       if (parsed.internships.length) setInternshipsList(parsed.internships);
@@ -710,6 +792,16 @@ function DashboardLayout() {
         details: `Done — ${parsed.jobs.length} jobs and ${parsed.internships.length} internships · all career sections saved.`,
         isFallback: false,
       });
+      // Strictly consume one credit only after successful analysis output.
+      setMatchesRemaining((prev) => Math.max(0, prev - 1));
+      if (user?.id) {
+        const usedKey = `resume_trials_used_${user.id}`;
+        const currentUsedRaw = localStorage.getItem(usedKey);
+        const currentUsed = currentUsedRaw ? Number(currentUsedRaw) : 0;
+        const nextUsed = Math.min(MAX_RESUME_TRIALS, (Number.isFinite(currentUsed) ? currentUsed : 0) + 1);
+        localStorage.setItem(usedKey, String(nextUsed));
+      }
+      await incrementTrialsUsed();
 
       console.log("n8n analysis applied:", {
         jobs: parsed.jobs.length,
@@ -723,7 +815,7 @@ function DashboardLayout() {
 
       toast.success("Analysis complete", {
         id: uploadToastId,
-        description: `${parsed.jobs.length} jobs · ${parsed.internships.length} internships from n8n.`,
+        description: `${parsed.jobs.length} jobs · ${parsed.internships.length} internships are ready.`,
       });
     } catch (err: unknown) {
       console.error("n8n upload error:", err);
@@ -911,68 +1003,60 @@ function DashboardLayout() {
 
   const handleSaveJobToggle = async (job: any) => {
     if (!ensureTrackerPersistence()) return;
-
     const normalized = normalizeJob(job);
-    const existing = savedJobsList.find((j) => j.id === normalized.id);
 
-    try {
-      if (existing) {
-        await removeSavedJobFromStore(user.id, existing);
-        setSavedJobsList((prev) => prev.filter((j) => j.id !== normalized.id));
-        toast.info(`Removed ${normalized.title} from Saved Jobs`);
-        return;
-      }
+    saveJobQueueRef.current = saveJobQueueRef.current
+      .then(async () => {
+        const existing = savedJobsList.find((j) => j.id === normalized.id);
+        if (existing) {
+          await removeSavedJobFromStore(user.id, existing);
+          setSavedJobsList((prev) => prev.filter((j) => j.id !== normalized.id));
+          toast.info(`Removed ${normalized.title} from Saved Jobs`);
+          return;
+        }
 
-      const saved = await saveJobToStore(user.id, normalized);
-      if (!saved) {
-        toast.error("Could not save job. Try again.");
-        return;
-      }
-      setSavedJobsList((prev) => [saved, ...prev.filter((j) => j.id !== saved.id)]);
-      toast.success(`Saved ${saved.title} to Saved Jobs!`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Could not save job", {
-        description: "Check your Supabase connection and try again.",
+        const saved = await saveJobToStore(user.id, normalized);
+        if (!saved) {
+          toast.error("Could not save job. Try again.");
+          return;
+        }
+        setSavedJobsList((prev) => [saved, ...prev.filter((j) => j.id !== saved.id)]);
+        toast.success(`Saved ${saved.title} to Saved Jobs!`);
+      })
+      .catch((err) => {
+        console.error(err);
+        toast.error("Could not save job", {
+          description: "Service unavailable. Try again later.",
+        });
       });
-    }
+
+    await saveJobQueueRef.current;
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate({ to: "/" });
   };
 
   const handleQuickApplyJob = async (job: any) => {
-    if (!ensureTrackerPersistence()) return;
-
     const normalized = normalizeJob(job);
-    const isApplied = applications.some(
-      (app) =>
-        app.company.toLowerCase() === normalized.company.toLowerCase() &&
-        app.role.toLowerCase() === normalized.title.toLowerCase(),
-    );
-    if (isApplied) {
-      toast.info(`You have already tracked an application at ${normalized.company}.`);
+    const applicationUrl = (normalized.url || "").trim();
+
+    if (!applicationUrl || applicationUrl === "#") {
+      toast.error("Application link unavailable", {
+        description: "This role does not have a direct apply URL yet.",
+      });
       return;
     }
 
     try {
-      const created = await insertApplication(user.id, {
-        company: normalized.company,
-        role: normalized.title,
-        status: "Applied",
-        salary: String(normalized.salary),
-        date: new Date().toISOString().split("T")[0],
-        notes: `Quick apply from Job Matcher. Match score: ${normalized.score}%`,
-        location: normalized.location,
-      });
-
-      if (!created) {
-        toast.info(`Application at ${normalized.company} is already tracked.`);
-        return;
-      }
-
-      setApplications((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
-      toast.success("Application tracked successfully!");
+      window.open(applicationUrl, "_blank", "noopener,noreferrer");
+      toast.success("Opening application link");
     } catch (err) {
       console.error(err);
-      toast.error("Could not track application");
+      toast.error("Service unavailable", {
+        description: "Try again later.",
+      });
     }
   };
 
@@ -1058,7 +1142,8 @@ function DashboardLayout() {
           </div>
 
           <button
-            onClick={() => signOut()}
+            type="button"
+            onClick={handleSignOut}
             className="w-full mt-3.5 flex items-center gap-2 px-3 py-2.5 rounded-lg text-slate-500 hover:text-[#ef4444] hover:bg-[#ef4444]/10 border border-transparent hover:border-[#ef4444]/20 transition-all duration-300 text-xs font-bold"
             style={{ minHeight: "48px" }}
           >
@@ -1233,11 +1318,11 @@ function DashboardLayout() {
                         </div>
                         <div className="space-y-0.5">
                           <span className="text-xs font-black text-slate-200">Free Trial Usage</span>
-                          <p className="text-[10px] text-slate-400 font-medium">You get 3 free resume matches per account.</p>
+                          <p className="text-[10px] text-slate-400 font-medium">You get 2 free resume matches per account.</p>
                         </div>
                       </div>
                       <span className="text-xs font-black text-slate-300 whitespace-nowrap shrink-0">
-                        <span className="text-[#3b82f6] text-sm font-bold">{matchesRemaining}</span> / 3 remaining
+                        <span className="text-[#3b82f6] text-sm font-bold">{matchesRemaining}</span> / 2 remaining
                       </span>
                     </div>
 
@@ -1297,15 +1382,17 @@ function DashboardLayout() {
                     {/* Analyze Action Button */}
                     <button
                       onClick={() => startAnalysis(stagedFile!)}
-                      disabled={!stagedFile}
+                      disabled={!stagedFile || matchesRemaining <= 0}
                       className={`w-full h-12 rounded-xl text-white font-bold text-xs hover-shimmer shadow-lg flex items-center justify-center gap-2 transition-all duration-300 ${stagedFile
-                          ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
+                          ? matchesRemaining > 0
+                            ? "bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] cursor-pointer hover:scale-[1.01] active:scale-[0.99]"
+                            : "bg-white/5 border border-white/5 text-slate-500 cursor-not-allowed"
                           : "bg-white/5 border border-white/5 text-slate-500 cursor-not-allowed"
                         }`}
                       style={{ minHeight: "48px" }}
                     >
                       <Sparkles className="w-4 h-4" />
-                      Analyze & Find Matches
+                      {matchesRemaining > 0 ? "Analyze & Find Matches" : "Free Trial Limit Reached"}
                     </button>
                   </div>
                 </div>
@@ -1353,7 +1440,7 @@ function DashboardLayout() {
                     <PipelineStepCard
                       stepNum={1}
                       title="Analyzing Resume"
-                      description="Validating file format and size under 2MB, transmitting payload to n8n Railway webhook."
+                      description="Validating file format and size under 2MB, sending to processing service."
                       status={
                         pipelineStatus.step === "analyzing"
                           ? "active"
@@ -1444,7 +1531,6 @@ function DashboardLayout() {
                         setResumeFile(null);
                         setJobsList([]);
                         setInternshipsList([]);
-                        setN8nResponse(null);
                         refreshAnalysis();
                       }}
                       className="w-full h-10 rounded-xl bg-white/5 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all duration-300 cursor-pointer select-none"
@@ -1454,54 +1540,10 @@ function DashboardLayout() {
                     </button>
                   )}
 
-                  {/* Debug collapsable */}
-                  {n8nResponse && (
-                    <div className="border-t border-white/[0.04] pt-3 select-text">
-                      <details className="group">
-                        <summary className="text-[10px] font-bold text-slate-500 hover:text-slate-350 cursor-pointer list-none flex items-center justify-between select-none">
-                          <span>🔍 Debug: View Raw Webhook Response</span>
-                          <span className="transition-transform group-open:rotate-180">▼</span>
-                        </summary>
-                        <pre className="mt-2 p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-36 custom-scrollbar">
-                          {typeof n8nResponse === "object"
-                            ? JSON.stringify(n8nResponse, null, 2)
-                            : String(n8nResponse)}
-                        </pre>
-                      </details>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Filter controls */}
-              <div className="glass-card rounded-2xl p-4 border border-white/5 flex flex-col md:flex-row items-center gap-4">
-                <div className="relative flex-1 w-full">
-                  <Search className="absolute left-3 top-4 h-4 w-4 text-slate-500" />
-                  <Input
-                    placeholder="Search company or title keywords..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10 h-12 w-full bg-slate-900 border-white/10 text-xs rounded-xl focus:ring-2 focus:ring-[#8b5cf6]/20"
-                  />
-                </div>
-                <div className="flex items-center gap-3 w-full md:w-auto shrink-0 overflow-x-auto custom-scrollbar pb-1 md:pb-0">
-                  <span className="text-xs font-bold text-slate-400 whitespace-nowrap select-none">Role Style:</span>
-                  {["All", "Frontend", "Backend", "Fullstack"].map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setSelectedRoleType(type)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedRoleType === type
-                          ? "bg-[#8b5cf6] text-white shadow-sm"
-                          : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Jobs vs internships from latest n8n run */}
+              {/* Jobs vs internships from latest processing run */}
               {hasAnyMatches && (
                 <div className="flex gap-2 pb-2">
                   <button
@@ -1533,7 +1575,7 @@ function DashboardLayout() {
                     <Search className="w-8 h-8 text-[#8b5cf6] animate-bounce" />
                   </div>
                   <h4 className="text-sm font-bold text-white">Aggregating live API feeds...</h4>
-                  <p className="text-xs text-slate-500">Connecting via n8n scrape worker nodes</p>
+                  <p className="text-xs text-slate-500">Connecting to service worker nodes</p>
                 </div>
               ) : !hasAnyMatches ? (
                 <div className="py-12 flex flex-col items-center justify-center space-y-3 border border-white/5 rounded-2xl bg-slate-950/20 select-none animate-in fade-in max-w-xl mx-auto">
@@ -1549,15 +1591,7 @@ function DashboardLayout() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {(matcherView === "jobs" ? jobsList : internshipsList)
-                    .filter((job) => {
-                      const matchesKeyword =
-                        job.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        job.company.toLowerCase().includes(searchQuery.toLowerCase());
-                      const matchesType = selectedRoleType === "All" || job.type === selectedRoleType;
-                      return matchesKeyword && matchesType;
-                    })
-                    .map((job) => {
+                  {(matcherView === "jobs" ? jobsList : internshipsList).map((job) => {
                       const jobKey = normalizeJob(job).id;
                       const isSaved = savedJobsList.some((j) => j.id === jobKey);
                       return (

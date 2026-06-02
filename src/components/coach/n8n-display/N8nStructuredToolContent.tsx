@@ -326,7 +326,7 @@ function JobsView({
 function EmptySection({ name }: { name: string }) {
   return (
     <p className="text-sm text-slate-500 text-center py-8">
-      No <span className="text-slate-400 font-mono">{name}</span> in your last n8n run.
+      No <span className="text-slate-400 font-mono">{name}</span> in your last processing run.
     </p>
   );
 }

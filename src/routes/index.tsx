@@ -366,8 +366,8 @@ function LandingPage() {
                 </div>
                 <h3 className="text-lg font-bold text-foreground">Live Web Scrapers</h3>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Connects seamlessly to n8n backend workflows. Scrapes online job postings matching
-                  your resume automatically.
+                  Connects to our processing service. Scrapes online job postings matching your resume
+                  automatically.
                 </p>
               </div>
 

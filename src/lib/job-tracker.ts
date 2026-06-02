@@ -90,46 +90,77 @@ export function normalizeJob(job: Record<string, unknown>, index = 0): TrackedJo
 
 function rowToJob(row: Record<string, unknown>): TrackedJob {
   return normalizeJob({
-    id: row.job_id,
+    id: row.job_id || row.id,
     title: row.title,
     company: row.company,
     location: row.location,
     salary: row.salary,
-    url: row.apply_url,
+    url: row.apply_url || row.apply_link || row.url,
     _savedRowId: row.id,
   });
 }
 
 function rowToApplication(row: Record<string, unknown>): TrackedApplication {
-  const applied = row.applied_date ? String(row.applied_date) : "";
+  const applied = row.applied_date
+    ? String(row.applied_date)
+    : row.date
+      ? String(row.date)
+      : row.created_at
+        ? String(row.created_at)
+        : "";
   return {
     id: String(row.id),
     company: String(row.company || ""),
-    role: String(row.title || ""),
+    role: String(row.title || row.role || ""),
     status: String(row.status || "Applied"),
     salary: row.salary ? String(row.salary) : undefined,
     date: applied.includes("T") ? applied.split("T")[0] : applied || new Date().toISOString().split("T")[0],
     notes: row.notes ? String(row.notes) : undefined,
+    location: row.location ? String(row.location) : undefined,
   };
 }
 
+function isTransientSupabaseError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { status?: number; code?: string; message?: string };
+  const status = Number(e.status || 0);
+  const msg = String(e.message || "").toLowerCase();
+  return (
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500 ||
+    msg.includes("timeout") ||
+    msg.includes("temporar") ||
+    msg.includes("network")
+  );
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function fetchSavedJobs(userId: string): Promise<TrackedJob[]> {
-  const { data, error } = await supabase
+  const primary = await supabase
     .from("saved_jobs")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
-  if (error) {
-    console.error("fetchSavedJobs:", error);
-    throw error;
+  if (!primary.error) {
+    return (primary.data || []).map((row) => rowToJob(row as Record<string, unknown>));
   }
 
-  return (data || []).map((row) => rowToJob(row as Record<string, unknown>));
+  // Fallback for legacy schemas that may not have created_at
+  const fallback = await supabase.from("saved_jobs").select("*").eq("user_id", userId);
+  if (fallback.error) {
+    console.error("fetchSavedJobs:", fallback.error);
+    throw fallback.error;
+  }
+  return (fallback.data || []).map((row) => rowToJob(row as Record<string, unknown>));
 }
 
 export async function saveJobToStore(userId: string, job: TrackedJob): Promise<TrackedJob | null> {
   const normalized = normalizeJob(job);
+  const safeUrl = (normalized.url || "").trim() || "#";
 
   const { data: existing, error: existingErr } = await supabase
     .from("saved_jobs")
@@ -139,34 +170,117 @@ export async function saveJobToStore(userId: string, job: TrackedJob): Promise<T
     .maybeSingle();
 
   if (existingErr) {
-    console.error("saveJobToStore lookup:", existingErr);
-    throw existingErr;
-  }
+    // Legacy schemas may not have job_id. Fall back to title+company duplicate check.
+    const fallbackLookup = await supabase
+      .from("saved_jobs")
+      .select("*")
+      .eq("user_id", userId)
+      .ilike("title", normalized.title)
+      .ilike("company", normalized.company)
+      .maybeSingle();
 
-  if (existing) {
+    if (fallbackLookup.error) {
+      console.error("saveJobToStore lookup:", fallbackLookup.error);
+    } else if (fallbackLookup.data) {
+      return rowToJob(fallbackLookup.data as Record<string, unknown>);
+    }
+  } else if (existing) {
     return rowToJob(existing as Record<string, unknown>);
   }
 
-  const { data, error } = await supabase
-    .from("saved_jobs")
-    .insert({
+  // Try multiple payload shapes to support schema variants across environments.
+  const payloadVariants: Array<Record<string, unknown>> = [
+    {
       user_id: userId,
       job_id: normalized.id,
       title: normalized.title,
       company: normalized.company,
-      location: normalized.location,
-      salary: String(normalized.salary),
-      apply_url: normalized.url || null,
-    })
-    .select("*")
-    .single();
+      location: normalized.location || "Remote",
+      salary: String(normalized.salary || "—"),
+      apply_url: safeUrl,
+      url: safeUrl,
+    },
+    {
+      user_id: userId,
+      title: normalized.title,
+      company: normalized.company,
+      location: normalized.location || "Remote",
+      salary: String(normalized.salary || "—"),
+      apply_url: safeUrl,
+      url: safeUrl,
+    },
+    {
+      user_id: userId,
+      title: normalized.title,
+      company: normalized.company,
+      location: normalized.location || "Remote",
+      salary: String(normalized.salary || "—"),
+      url: safeUrl,
+    },
+    {
+      user_id: userId,
+      title: normalized.title,
+      company: normalized.company,
+      url: safeUrl,
+    },
+  ];
 
-  if (error) {
-    console.error("saveJobToStore:", error);
-    throw error;
+  let lastError: unknown = null;
+  for (const payload of payloadVariants) {
+    // Retry write failures with small backoff to avoid random mid-list save drops.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const result = await supabase.from("saved_jobs").insert(payload);
+      if (!result.error) {
+        return normalized;
+      }
+      lastError = result.error;
+      if (isTransientSupabaseError(result.error)) {
+        await sleep(200 * (attempt + 1));
+      }
+    }
   }
 
-  return rowToJob(data as Record<string, unknown>);
+  // Recovery path: if insert failed but row exists, treat it as saved.
+  const existingByTitleCompany = await supabase
+    .from("saved_jobs")
+    .select("*")
+    .eq("user_id", userId)
+    .ilike("title", normalized.title)
+    .ilike("company", normalized.company)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (!existingByTitleCompany.error && (existingByTitleCompany.data || []).length > 0) {
+    return rowToJob((existingByTitleCompany.data || [])[0] as Record<string, unknown>);
+  }
+
+  // If created_at is unavailable in older schemas, retry without ordering.
+  const fallbackExisting = await supabase
+    .from("saved_jobs")
+    .select("*")
+    .eq("user_id", userId)
+    .ilike("title", normalized.title)
+    .ilike("company", normalized.company)
+    .limit(1);
+
+  if (!fallbackExisting.error && (fallbackExisting.data || []).length > 0) {
+    return rowToJob((fallbackExisting.data || [])[0] as Record<string, unknown>);
+  }
+
+  // Additional recovery for schemas keyed by URL.
+  const existingByUrl = await supabase
+    .from("saved_jobs")
+    .select("*")
+    .eq("user_id", userId)
+    .ilike("url", safeUrl)
+    .limit(1);
+
+  if (!existingByUrl.error && (existingByUrl.data || []).length > 0) {
+    return rowToJob((existingByUrl.data || [])[0] as Record<string, unknown>);
+  }
+
+  console.error("saveJobToStore:", lastError);
+  throw lastError;
 }
 
 export async function removeSavedJobFromStore(userId: string, job: TrackedJob): Promise<void> {
@@ -186,22 +300,37 @@ export async function removeSavedJobFromStore(userId: string, job: TrackedJob): 
     .eq("user_id", userId)
     .eq("job_id", job.id);
 
-  if (error) throw error;
+  if (!error) return;
+
+  // Fallback delete for schemas without `job_id`.
+  const fallback = await supabase
+    .from("saved_jobs")
+    .delete()
+    .eq("user_id", userId)
+    .ilike("title", job.title)
+    .ilike("company", job.company);
+
+  if (fallback.error) throw fallback.error;
 }
 
 export async function fetchApplications(userId: string): Promise<TrackedApplication[]> {
-  const { data, error } = await supabase
+  const primary = await supabase
     .from("applications")
     .select("*")
     .eq("user_id", userId)
     .order("applied_date", { ascending: false });
 
-  if (error) {
-    console.error("fetchApplications:", error);
-    throw error;
+  if (!primary.error) {
+    return (primary.data || []).map((row) => rowToApplication(row as Record<string, unknown>));
   }
 
-  return (data || []).map((row) => rowToApplication(row as Record<string, unknown>));
+  // Fallback for legacy schemas that may not have applied_date
+  const fallback = await supabase.from("applications").select("*").eq("user_id", userId);
+  if (fallback.error) {
+    console.error("fetchApplications:", fallback.error);
+    throw fallback.error;
+  }
+  return (fallback.data || []).map((row) => rowToApplication(row as Record<string, unknown>));
 }
 
 export async function insertApplication(
@@ -217,7 +346,7 @@ export async function insertApplication(
     notes: app.notes,
   };
 
-  const { data: existing, error: existingErr } = await supabase
+  let existingRes = await supabase
     .from("applications")
     .select("id")
     .eq("user_id", userId)
@@ -225,14 +354,25 @@ export async function insertApplication(
     .ilike("title", payload.role)
     .maybeSingle();
 
-  if (existingErr) {
-    console.error("insertApplication lookup:", existingErr);
-    throw existingErr;
+  // Fallback duplicate lookup for schemas using `role` instead of `title`
+  if (existingRes.error) {
+    existingRes = await supabase
+      .from("applications")
+      .select("id")
+      .eq("user_id", userId)
+      .ilike("company", payload.company)
+      .ilike("role", payload.role)
+      .maybeSingle();
   }
 
-  if (existing) return null;
+  if (existingRes.error) {
+    console.error("insertApplication lookup:", existingRes.error);
+    throw existingRes.error;
+  }
 
-  const { data, error } = await supabase
+  if (existingRes.data) return null;
+
+  const primaryInsert = await supabase
     .from("applications")
     .insert({
       user_id: userId,
@@ -243,16 +383,48 @@ export async function insertApplication(
       salary: payload.salary || null,
       notes: payload.notes || null,
       applied_date: payload.date,
-    })
-    .select("*")
-    .single();
+    });
 
-  if (error) {
-    console.error("insertApplication:", error);
-    throw error;
+  if (!primaryInsert.error) {
+    return {
+      id: app.id || `app-${Date.now()}`,
+      company: payload.company,
+      role: payload.role,
+      status: payload.status,
+      salary: payload.salary,
+      date: payload.date,
+      notes: payload.notes,
+    };
   }
 
-  return rowToApplication(data as Record<string, unknown>);
+  // Fallback for schemas using `role` and/or `date` columns.
+  const fallbackInsert = await supabase
+    .from("applications")
+    .insert({
+      user_id: userId,
+      job_id: app.id || `app-${Date.now()}`,
+      role: payload.role,
+      company: payload.company,
+      status: payload.status,
+      salary: payload.salary || null,
+      notes: payload.notes || null,
+      date: payload.date,
+    });
+
+  if (fallbackInsert.error) {
+    console.error("insertApplication:", fallbackInsert.error);
+    throw fallbackInsert.error;
+  }
+
+  return {
+    id: app.id || `app-${Date.now()}`,
+    company: payload.company,
+    role: payload.role,
+    status: payload.status,
+    salary: payload.salary,
+    date: payload.date,
+    notes: payload.notes,
+  };
 }
 
 export async function updateApplicationStatus(

@@ -425,7 +425,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const { error } = await supabase.auth.signOut();
+      const { error } = await supabase.auth.signOut({ scope: "local" });
       if (error) {
         toast.error("Sign out failed", { description: error.message });
       } else {
