@@ -30,7 +30,7 @@ export const Route = createFileRoute("/")({
   component: LandingPage,
   head: () => ({
     meta: [
-      { title: "AI Job Matcher - Premium Student & Fresher Job Platform" },
+      { title: "Job Flow Engine - Premium Student & Fresher Job Platform" },
       {
         name: "description",
         content:
@@ -427,7 +427,7 @@ function LandingPage() {
           <div className="mx-auto max-w-6xl px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-1.5">
               <Briefcase className="h-4 w-4 text-primary" />
-              <span className="font-bold text-foreground">AI Job Matcher</span>
+              <span className="font-bold text-foreground">Job Flow Engine</span>
               <span>© {new Date().getFullYear()}. All rights reserved.</span>
             </div>
             <div className="flex gap-4">
@@ -455,7 +455,7 @@ function LandingPage() {
               <form className="space-y-4" onSubmit={handleSignUpSubmit}>
                 <div className="text-center space-y-1 mb-4">
                   <h3 className="text-2xl font-bold tracking-tight text-foreground">Create Account</h3>
-                  <p className="text-xs text-muted-foreground">Join AI Job Matcher to start your journey.</p>
+                  <p className="text-xs text-muted-foreground">Join Job Flow Engine to start your journey.</p>
                 </div>
 
                 <div className="space-y-1.5">

@@ -1,6 +1,6 @@
-# AI Job Matcher 🚀
+#Job Flow Engine 🚀
 
-AI Job Matcher is a premium, recruiter-ready full-stack web application designed for students and freshers to supercharge their job search. It parses resume skills, calculates an ATS match rating, and matches seekers with live job and internship listings via AI scraping workflows—all wrapped in a stunning modern UI/UX featuring dark/light modes, glassmorphism elements, and smooth interactions.
+Job Flow Engine is a premium, recruiter-ready full-stack web application designed for students and freshers to supercharge their job search. It parses resume skills, calculates an ATS match rating, and matches seekers with live job and internship listings via AI scraping workflows—all wrapped in a stunning modern UI/UX featuring dark/light modes, glassmorphism elements, and smooth interactions.
 
 ---
 
