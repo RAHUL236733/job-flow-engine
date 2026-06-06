@@ -171,7 +171,7 @@ function LandingPage() {
                 <Briefcase className="h-5 w-5" />
               </div>
               <span className="text-sm sm:text-base font-bold tracking-tight text-foreground truncate">
-                AI Job<span className="text-primary font-extrabold">Matcher</span>
+                Job Flow<span className="text-primary font-extrabold">Engine</span>
               </span>
             </div>
 

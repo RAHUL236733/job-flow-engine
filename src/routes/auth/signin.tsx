@@ -53,7 +53,7 @@ function SignIn() {
               <Briefcase className="h-6 w-6" />
             </div>
             <span className="text-xl font-bold tracking-tight text-foreground">
-              AI Job<span className="text-primary font-extrabold">Matcher</span>
+              Job Flow Engine<span className="text-primary font-extrabold">Matcher</span>
             </span>
           </Link>
           <h2 className="mt-6 text-3xl font-bold tracking-tight text-foreground">Log In</h2>

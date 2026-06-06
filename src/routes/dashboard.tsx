@@ -1090,7 +1090,7 @@ function DashboardLayout() {
               </div>
             </div>
             <span className="text-md font-black tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-[#8b5cf6] via-[#3b82f6] to-[#8b5cf6]">
-              AI JobMatcher
+              Job Flow Engine
             </span>
           </div>
 
@@ -1180,7 +1180,7 @@ function DashboardLayout() {
                     />
                   </div>
                   <p className="text-sm text-slate-400 font-medium max-w-lg">
-                    Open any Career Tool below for ATS, resume review, salary insights, and more — all powered by your Supabase-stored analysis.
+                    Upload Your Resume Once and Let AI Agents Handle the Rest—From ATS Analysis and Skill Gap Detection to Smart Job Matching and Career Insights.
                   </p>
                   <div className="flex flex-col sm:flex-row flex-wrap gap-3 pt-2 w-full">
                     <button
@@ -1387,7 +1387,7 @@ function DashboardLayout() {
                 </div>
               ) : (
                 <div className="space-y-1.5 select-none">
-                  <h3 className="text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Live Job Matcher Index</h3>
+                  <h3 className="text-2xl font-black text-white bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">Live Job Flow Index</h3>
                   <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
                     Analyzing resume, extracting engineering attributes, and auditing roles.
                   </p>
@@ -1679,7 +1679,7 @@ function DashboardLayout() {
                   <Bookmark className="w-12 h-12 text-[#8b5cf6]/40" />
                   <div className="text-center space-y-1">
                     <h4 className="font-bold text-slate-300">Bookmarks Vault Empty</h4>
-                    <p className="text-xs text-slate-500">Go to Job Matcher index to save exciting jobs.</p>
+                    <p className="text-xs text-slate-500">Go to Job Flow Engine to save exciting jobs.</p>
                   </div>
                   <button
                     onClick={() => setActiveTab("matcher")}
